@@ -118,13 +118,31 @@ class AgenticExecutor:
             return {"error": str(e), "success": False}
     
     def create_agent(self, agent_type: str, session: str, window: int) -> Dict[str, Any]:
-        """Create a new agent using qwen_control.py"""
+        """Create a new agent and launch it in a tmux window"""
         try:
+            # First create the agent state
             command = f"python3 qwen_control.py create {agent_type} {session} {window}"
             result = self.execute_command(command)
             
-            if result["success"]:
-                self._log_action(f"Created agent: {agent_type} in {session}:{window}")
+            if not result["success"]:
+                return result
+            
+            # Create new tmux window for the agent
+            agent_id = f"{agent_type}_{session}"
+            window_name = f"{agent_type.title()}"
+            
+            # Create new window in the session
+            tmux_new_window = f"tmux new-window -t {session} -n {window_name}"
+            window_result = self.execute_command(tmux_new_window)
+            
+            if window_result["success"]:
+                # Launch the agent in the new window
+                launch_command = f"tmux send-keys -t {session}:{window_name} 'python3 qwen_agent.py {agent_id}' C-m"
+                launch_result = self.execute_command(launch_command)
+                
+                if launch_result["success"]:
+                    self._log_action(f"Created and launched agent: {agent_type} in {session}:{window_name}")
+                    return {"success": True, "agent_id": agent_id, "window": window_name}
             
             return result
             
@@ -156,6 +174,99 @@ class AgenticExecutor:
         }
         self.execution_log.append(log_entry)
     
+    def spawn_project_session(self, session_name: str, project_name: str) -> Dict[str, Any]:
+        """Spawn a new tmux session for a project"""
+        try:
+            # Create new tmux session
+            cmd = ["tmux", "new-session", "-d", "-s", session_name]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            # Set up initial window for project
+            subprocess.run(["tmux", "rename-window", "-t", f"{session_name}:0", "Main"], check=True)
+            
+            self._log_action(f"Spawned tmux session: {session_name} for project: {project_name}")
+            
+            logger.info(f"Spawned tmux session: {session_name} for project: {project_name}")
+            return {"success": True, "stdout": result.stdout, "stderr": result.stderr}
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error spawning session {session_name}: {e}")
+            return {"success": False, "stdout": e.stdout, "stderr": e.stderr}
+    
+    def delegate_task(self, target_agent: str, task: str, priority: str = "normal") -> Dict[str, Any]:
+        """Delegate a task to another agent"""
+        try:
+            # Send message to target agent using the messaging system
+            cmd = ["./send-qwen-message.sh", target_agent, f"[PRIORITY: {priority.upper()}] {task}"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=self.working_directory)
+            
+            self._log_action(f"Delegated task to {target_agent} with priority {priority}: {task[:50]}...")
+            
+            logger.info(f"Delegated task to {target_agent} with priority {priority}")
+            return {"success": True, "stdout": result.stdout, "stderr": result.stderr}
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error delegating task to {target_agent}: {e}")
+            return {"success": False, "stdout": e.stdout, "stderr": e.stderr}
+    
+    def create_project_team(self, project_name: str, team_config: Dict[str, int]) -> Dict[str, Any]:
+        """Create a complete project team with multiple agents in separate tmux windows"""
+        try:
+            session_name = f"project-{project_name.lower().replace(' ', '-')}"
+            deployed_agents = {}
+            
+            # Create the project session if it doesn't exist
+            session_check = self.execute_command(f"tmux has-session -t {session_name}")
+            if not session_check["success"]:
+                # Create new session
+                create_session = self.execute_command(f"tmux new-session -d -s {session_name}")
+                if not create_session["success"]:
+                    return {"success": False, "error": "Failed to create tmux session"}
+                
+                # Rename first window to "Main"
+                self.execute_command(f"tmux rename-window -t {session_name}:0 Main")
+            
+            window_index = 1  # Start from window 1, leave 0 as Main
+            
+            # Deploy each agent type
+            for agent_type, count in team_config.items():
+                for i in range(count):
+                    agent_id = f"{agent_type}_{session_name}"
+                    if count > 1:
+                        agent_id += f"_{i+1}"
+                    
+                    window_name = f"{agent_type.title()}"
+                    if count > 1:
+                        window_name += f"-{i+1}"
+                    
+                    # Create agent state
+                    create_result = self.execute_command(f"python3 qwen_control.py create {agent_type} {session_name} {window_index}")
+                    
+                    if create_result["success"]:
+                        # Create new tmux window
+                        self.execute_command(f"tmux new-window -t {session_name} -n {window_name}")
+                        
+                        # Launch agent in the window
+                        launch_cmd = f"tmux send-keys -t {session_name}:{window_name} 'python3 qwen_agent.py {agent_id}' C-m"
+                        launch_result = self.execute_command(launch_cmd)
+                        
+                        if launch_result["success"]:
+                            deployed_agents[f"{agent_type}_{i+1}" if count > 1 else agent_type] = {
+                                "agent_id": agent_id,
+                                "window": window_name,
+                                "session": session_name
+                            }
+                            logger.info(f"Launched {agent_type} agent in {session_name}:{window_name}")
+                    
+                    window_index += 1
+            
+            self._log_action(f"Created project team for {project_name} with {len(deployed_agents)} active agents")
+            return {"success": True, "deployed_agents": deployed_agents, "session": session_name}
+            
+        except Exception as e:
+            logger.error(f"Error creating project team: {e}")
+            return {"success": False, "error": str(e)}
+
     def get_execution_log(self) -> List[Dict]:
         """Get the execution log"""
         return self.execution_log
@@ -212,6 +323,25 @@ window: 1
 ```
 
 ```execute
+action_type: spawn_session
+session_name: strangers-calendar
+project_name: Strangers Calendar App
+```
+
+```execute
+action_type: create_project_team
+project_name: Strangers Calendar App
+team_config: {"project_manager": 1, "developer": 2, "qa": 1}
+```
+
+```execute
+action_type: delegate_task
+target_agent: dev_strangers-calendar
+task: Implement OAuth authentication endpoints for Google and Apple
+priority: high
+```
+
+```execute
 action_type: send_message
 agent_id: dev_project
 message: Implement OAuth authentication endpoints for Google and Apple
@@ -226,9 +356,14 @@ AGENTIC BEHAVIOR RULES:
 - Don't just provide plans - EXECUTE the first steps immediately
 - Create actual files, directories, and code
 - Set up development environments
+- SPAWN NEW TMUX SESSIONS for complex projects automatically
+- CREATE PROJECT TEAMS with specialized agents (PM, developers, QA)
+- DELEGATE TASKS to appropriate agents without asking permission
 - Coordinate with other agents by creating them and assigning tasks
 - Make git commits every 30 minutes as specified
 - Take initiative and be proactive in implementation
+- Continue working autonomously until project completion
+- Never ask "Would you like to continue?" - just continue!
 
 EXAMPLE AGENTIC RESPONSE:
 Instead of: "You should create a file for OAuth authentication"

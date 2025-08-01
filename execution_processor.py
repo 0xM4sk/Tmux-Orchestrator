@@ -160,6 +160,60 @@ class ExecutionProcessor:
                     "agent_id": agent_id
                 }
                 
+            elif action_type == 'spawn_session':
+                session_name = execution_data.get('session_name', '')
+                project_name = execution_data.get('project_name', '')
+                
+                result = self.executor.spawn_project_session(session_name, project_name)
+                return {
+                    "action_type": "spawn_session",
+                    "session_name": session_name,
+                    "project_name": project_name,
+                    "success": result["success"],
+                    "output": result.get("stdout", ""),
+                    "agent_id": agent_id
+                }
+                
+            elif action_type == 'delegate_task':
+                target_agent = execution_data.get('target_agent', '')
+                task = execution_data.get('task', '')
+                priority = execution_data.get('priority', 'normal')
+                
+                result = self.executor.delegate_task(target_agent, task, priority)
+                return {
+                    "action_type": "delegate_task",
+                    "target_agent": target_agent,
+                    "task": task,
+                    "priority": priority,
+                    "success": result["success"],
+                    "agent_id": agent_id
+                }
+                
+            elif action_type == 'create_project_team':
+                project_name = execution_data.get('project_name', '')
+                team_config_raw = execution_data.get('team_config', '{}')
+                
+                # Parse team_config if it's a string
+                if isinstance(team_config_raw, str):
+                    try:
+                        import json
+                        team_config = json.loads(team_config_raw)
+                    except json.JSONDecodeError:
+                        # Fallback to default config
+                        team_config = {"project_manager": 1, "developer": 1, "qa": 1}
+                else:
+                    team_config = team_config_raw
+                
+                result = self.executor.create_project_team(project_name, team_config)
+                return {
+                    "action_type": "create_project_team",
+                    "project_name": project_name,
+                    "team_config": team_config,
+                    "success": result["success"],
+                    "deployed_agents": result.get("deployed_agents", {}),
+                    "agent_id": agent_id
+                }
+                
             elif action_type == 'send_message':
                 target_agent = execution_data.get('agent_id', '')
                 message = execution_data.get('message', '')
@@ -225,6 +279,13 @@ class ExecutionProcessor:
                 return f"✅ **EXECUTED**: Ran command `{result.get('command', '')}`"
             elif action_type == 'create_agent':
                 return f"✅ **EXECUTED**: Created {result.get('agent_type', '')} agent in {result.get('session', '')}:{result.get('window', '')}"
+            elif action_type == 'spawn_session':
+                return f"✅ **EXECUTED**: Spawned tmux session `{result.get('session_name', '')}` for project `{result.get('project_name', '')}`"
+            elif action_type == 'delegate_task':
+                return f"✅ **EXECUTED**: Delegated task to {result.get('target_agent', '')} (priority: {result.get('priority', 'normal')})"
+            elif action_type == 'create_project_team':
+                agents = result.get('deployed_agents', {})
+                return f"✅ **EXECUTED**: Created project team for `{result.get('project_name', '')}` with {len(agents)} agents"
             elif action_type == 'send_message':
                 return f"✅ **EXECUTED**: Sent message to {result.get('target_agent', '')}"
             elif action_type == 'git_commit':

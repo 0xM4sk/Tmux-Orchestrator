@@ -3,6 +3,13 @@
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "oauth2-server": "^3.1.1"
+    "express-mock-request": "^0.0.2",
+    "jest": "^30.0.5",
+    "oauth2-server": "^3.1.1",
+    "passport": "^0.7.0",
+    "passport-apple": "^2.0.2",
+    "passport-google-oauth20": "^2.0.0",
+    "react-apple-login": "^1.1.6",
+    "react-google-login": "^5.2.2"
   }
 }
