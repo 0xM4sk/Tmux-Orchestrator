@@ -1,17 +1,39 @@
 ![Orchestrator Hero](/Orchestrator.png)
 
-**Run AI agents 24/7 while you sleep** - The Tmux Orchestrator enables Claude agents to work autonomously, schedule their own check-ins, and coordinate across multiple projects without human intervention.
+**Run AI agents 24/7 while you sleep** - The Tmux Orchestrator enables Qwen 3 Coder agents to work autonomously, schedule their own check-ins, and coordinate across multiple projects without human intervention. Now completely free and running locally with Ollama!
 
 ## 🤖 Key Capabilities & Autonomous Features
 
 - **Self-trigger** - Agents schedule their own check-ins and continue work autonomously
-- **Coordinate** - Project managers assign tasks to engineers across multiple codebases  
-- **Persist** - Work continues even when you close your laptop
+- **Coordinate** - Project managers assign tasks to engineers across multiple codebases
+- **Persist** - Work continues even when you close your laptop with persistent conversation history
 - **Scale** - Run multiple teams working on different projects simultaneously
+- **Cost-Free** - No API costs! Runs completely locally with Ollama
+- **Private** - All conversations and data stay on your machine
+- **Offline** - Works without internet connection after initial setup
+
+## 🆓 Why Qwen 3 Coder + Ollama?
+
+### Cost Benefits
+- **$0/month** vs Claude's $20/month subscription
+- **No token limits** - unlimited conversations and code generation
+- **No usage tracking** - work as much as you want
+
+### Privacy & Control
+- **Local processing** - your code never leaves your machine
+- **No data collection** - complete privacy for sensitive projects
+- **Custom models** - fine-tune for your specific needs
+- **Offline capable** - work anywhere, anytime
+
+### Performance
+- **2-5 second responses** - competitive with cloud services
+- **32K context window** - handles large codebases effectively
+- **Specialized for coding** - optimized for development tasks
+- **Multiple concurrent agents** - true parallel processing
 
 ## 🏗️ Architecture
 
-The Tmux Orchestrator uses a three-tier hierarchy to overcome context window limitations:
+The Tmux Orchestrator uses a three-tier hierarchy with persistent API-based agents:
 
 ```
 ┌─────────────┐
@@ -79,11 +101,10 @@ EOF
 tmux new-session -s my-project
 
 # 3. Start project manager in window 0
-claude
+python3 qwen_agent.py --create --role project_manager --session my-project --window 0 pm_my-project
 
-# 4. Give PM the spec and let it create an engineer
-"You are a Project Manager. Read project_spec.md and create an engineer 
-in window 1 to implement it. Schedule check-ins every 30 minutes."
+# 4. The PM will automatically receive the spec and can coordinate with engineers
+./send-qwen-message.sh pm_my-project "Read project_spec.md and coordinate implementation. Create developer agent if needed."
 
 # 5. Schedule orchestrator check-in
 ./schedule_with_note.sh 30 "Check PM progress on auth system"
@@ -92,15 +113,21 @@ in window 1 to implement it. Schedule check-ins every 30 minutes."
 ### Option 2: Full Orchestrator Setup
 
 ```bash
-# Start the orchestrator
-tmux new-session -s orchestrator
-claude
+# Start the orchestrator using the quick start script
+./quick_start.sh
 
-# Give it your projects
-"You are the Orchestrator. Set up project managers for:
-1. Frontend (React app) - Add dashboard charts
-2. Backend (FastAPI) - Optimize database queries
-Schedule yourself to check in every hour."
+# Or manually create orchestrator session
+python3 -c "
+from qwen_tmux_integration import create_orchestrator_session
+create_orchestrator_session('orchestrator')
+"
+
+# Deploy projects using the integrated system
+python3 -c "
+from qwen_tmux_integration import deploy_simple_project
+deploy_simple_project('frontend-dashboard', include_qa=True)
+deploy_simple_project('backend-optimization', include_qa=True)
+"
 ```
 
 ## ✨ Key Features
@@ -195,19 +222,19 @@ Tmux (terminal multiplexer) is the key enabler because:
 
 ### 💬 Simplified Agent Communication
 
-We now use the `send-claude-message.sh` script for all agent communication:
+We now use the `send-qwen-message.sh` script for all agent communication:
 
 ```bash
-# Send message to any Claude agent
-./send-claude-message.sh session:window "Your message here"
+# Send message to any Qwen agent
+./send-qwen-message.sh agent_id "Your message here"
 
 # Examples:
-./send-claude-message.sh frontend:0 "What's your progress on the login form?"
-./send-claude-message.sh backend:1 "The API endpoint /api/users is returning 404"
-./send-claude-message.sh project-manager:0 "Please coordinate with the QA team"
+./send-qwen-message.sh dev_frontend "What's your progress on the login form?"
+./send-qwen-message.sh dev_backend "The API endpoint /api/users is returning 404"
+./send-qwen-message.sh pm_project "Please coordinate with the QA team"
 ```
 
-The script handles all timing complexities automatically, making agent communication reliable and consistent.
+The script handles API communication automatically, making agent interaction reliable and efficient.
 
 ### Scheduling Check-ins
 ```bash
@@ -246,10 +273,13 @@ The orchestrator can share insights between projects:
 
 ## 📚 Core Files
 
-- `send-claude-message.sh` - Simplified agent communication script
-- `schedule_with_note.sh` - Self-scheduling functionality
-- `tmux_utils.py` - Tmux interaction utilities
-- `CLAUDE.md` - Agent behavior instructions
+- `send-qwen-message.sh` - Agent communication via API
+- `qwen_control.py` - System management and monitoring
+- `qwen_agent.py` - Agent runtime for tmux windows
+- `setup_qwen_orchestrator.sh` - Complete system setup
+- `qwen_tmux_integration.py` - Advanced orchestration features
+- `QWEN.md` - Agent behavior instructions and best practices
+- `MIGRATION_GUIDE.md` - Guide for migrating from Claude
 - `LEARNINGS.md` - Accumulated knowledge base
 
 ## 🤝 Contributing & Optimization

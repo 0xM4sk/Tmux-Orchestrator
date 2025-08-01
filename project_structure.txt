@@ -1,0 +1,24 @@
+|
+/strangers_calendar_app/
+├── backend/
+│   ├── controllers/
+│   ├── models/
+│   ├── routes/
+│   └── utils/
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── services/
+│   │   └── App.js
+│   └── package.json
+├── tests/
+│   ├── backend/
+│   ├── frontend/
+│   └── integration/
+├── .env
+├── .gitignore
+├── package.json
+├── README.md
+└── docker-compose.yml
