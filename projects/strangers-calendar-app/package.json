@@ -1,0 +1,16 @@
+|
+{
+"name": "strangers-calendar-app",
+"version": "1.0.0",
+"description": "A calendar app for strangers",
+"main": "index.js",
+"scripts": {
+"test": "jest"
+},
+"keywords": [],
+"author": "",
+"license": "ISC",
+"dependencies": {
+"express": "^4.17.1"
+}
+}

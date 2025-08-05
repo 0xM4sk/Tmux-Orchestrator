@@ -21,7 +21,7 @@ import shutil
 from qwen_client import Message, QwenClient, QwenConfig
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class AgentStatus(Enum):
@@ -540,6 +540,63 @@ Testing Approach:
         except Exception as e:
             logger.error(f"Error cleaning up orphaned agents: {e}")
             return 0
+    
+    def cleanup_duplicate_agents(self) -> int:
+        """Clean up duplicate agents (agents with same session_name and window_index)"""
+        try:
+            # Get all active agents
+            active_agents = self.get_active_agents()
+            
+            # Group agents by session_name and window_index
+            agent_groups = {}
+            for agent in active_agents:
+                key = (agent.session_name, agent.window_index)
+                if key not in agent_groups:
+                    agent_groups[key] = []
+                agent_groups[key].append(agent)
+            
+            # For each group with more than one agent, keep the most recently active one
+            duplicate_agents = []
+            for key, agents in agent_groups.items():
+                if len(agents) > 1:
+                    # Sort by last_active time, keep the most recent one
+                    agents.sort(key=lambda x: x.last_active, reverse=True)
+                    # Archive all but the most recent agent
+                    for agent in agents[1:]:
+                        duplicate_agents.append(agent.agent_id)
+            
+            # Archive duplicate agents
+            for agent_id in duplicate_agents:
+                self.archive_agent(agent_id)
+            
+            logger.info(f"Cleaned up {len(duplicate_agents)} duplicate agents")
+            return len(duplicate_agents)
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up duplicate agents: {e}")
+            return 0
+    
+    def aggressive_cleanup(self, inactive_threshold_hours: int = 1) -> Dict[str, int]:
+        """Perform aggressive cleanup with a shorter inactive threshold"""
+        try:
+            # Cleanup inactive agents with shorter threshold
+            inactive_cleaned = self.cleanup_inactive_agents(inactive_threshold_hours)
+            
+            # Cleanup orphaned agents
+            orphaned_cleaned = self.cleanup_orphaned_agents()
+            
+            # Cleanup duplicate agents
+            duplicate_cleaned = self.cleanup_duplicate_agents()
+            
+            return {
+                "inactive_agents_cleaned": inactive_cleaned,
+                "orphaned_agents_cleaned": orphaned_cleaned,
+                "duplicate_agents_cleaned": duplicate_cleaned
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during aggressive cleanup: {e}")
+            return {"error": str(e)}
 
 # Example usage and testing
 if __name__ == "__main__":

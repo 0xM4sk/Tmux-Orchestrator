@@ -1,0 +1,6 @@
+|
+<zap>
+<spider id="1" starturl="http://localhost:3000/" />
+<ascan id="2" />
+<report file="security_report.html" format="HTML" />
+</zap>

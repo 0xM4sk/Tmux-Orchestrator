@@ -1,0 +1,23 @@
+|
+# Usability Test Plan
+
+## Objective
+To evaluate the user experience of the Strangers Calendar App and identify areas for improvement.
+
+## Participants
+- 10 users with varying levels of technical expertise
+- Different devices (desktop, mobile)
+
+## Tasks
+1. Create a new calendar
+2. Set availability windows
+3. Share calendars with others
+
+## Procedure
+1. Recruit participants and provide instructions
+2. Observe users while they complete the tasks
+3. Collect feedback through surveys and interviews
+
+## Analysis
+- Document user interactions and comments
+- Identify common pain points and areas for improvement

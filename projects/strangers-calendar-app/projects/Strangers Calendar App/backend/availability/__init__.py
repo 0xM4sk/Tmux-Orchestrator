@@ -1,0 +1,2 @@
+|
+# Availability module initialization

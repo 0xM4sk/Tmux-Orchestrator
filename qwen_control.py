@@ -581,7 +581,7 @@ def print_status(status_data: Dict, detail_level: str = "summary"):
             elif friendly_name == "orchestrator":
                 friendly_name = "🧭 Orchestrator"
                 
-            print(f"  {friendly_name} ({agent['type']}):")
+            print(f"  {friendly_name} [{agent['agent_id']}] ({agent['type']}):")
             print(f"    Session: {agent['session']}")
             print(f"    Status: {agent['status']}")
             print(f"    Messages: {agent['messages']}")
@@ -698,7 +698,7 @@ def main():
                         elif friendly_name == "orchestrator":
                             friendly_name = "🧭 Orchestrator"
                         
-                        print(f"    {friendly_name} ({agent['type']}) - {agent['session']} - {agent['status']}")
+                        print(f"    {friendly_name} [{agent['agent_id']}] ({agent['type']}) - {agent['session']} - {agent['status']}")
                 
                 # Print unassigned agents
                 if unassigned_agents:
@@ -720,7 +720,7 @@ def main():
                         elif friendly_name == "orchestrator":
                             friendly_name = "🧭 Orchestrator"
                         
-                        print(f"    {friendly_name} ({agent['type']}) - {agent['session']} - {agent['status']}")
+                        print(f"    {friendly_name} [{agent['agent_id']}] ({agent['type']}) - {agent['session']} - {agent['status']}")
             else:
                 print("No agents found")
         

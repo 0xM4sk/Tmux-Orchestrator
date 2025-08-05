@@ -1,0 +1,7 @@
+|
+flask==2.0.1
+requests==2.25.1
+unittest==4.13.0
+python-dotenv==0.20.0
+twilio==6.68.0
+whatsappio==1.0.0

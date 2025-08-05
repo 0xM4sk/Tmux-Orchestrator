@@ -1,0 +1,23 @@
+|
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Edit Profile</title>
+</head>
+<body>
+<h1>Edit Profile</h1>
+<form method="POST" action="">
+{{ form.hidden_tag() }}
+<div class="form-group">
+{{ form.bio.label }}<br>
+{{ form.bio(size=32) }}
+</div>
+<div class="form-group">
+{{ form.profile_picture_url.label }}<br>
+{{ form.profile_picture_url(size=64) }}
+</div>
+<p><input type="submit" value="Save"></p>
+</form>
+</body>
+</html>

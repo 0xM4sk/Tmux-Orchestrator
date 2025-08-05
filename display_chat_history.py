@@ -5,12 +5,16 @@ Display chat history between agents in a chat room structure
 
 import json
 import os
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict
 from agent_state import AgentStateManager
 from conversation_manager import ConversationManager
 from qwen_client import QwenClient, QwenConfig
+
+# Suppress INFO logs
+logging.getLogger().setLevel(logging.WARNING)
 
 def load_conversation_history(agent_id: str, days_back: int = 7) -> List[Dict]:
     """Load conversation history for an agent"""
@@ -86,6 +90,21 @@ def format_message_for_display(message: Dict) -> str:
             else:
                 # For other agents, just show a cleaner name
                 display_name = f"🤖 {sender.split('_')[0].title()}"
+        
+        # Special handling for the chat history display to show actual agent identities
+        if "developer_project-strangers-calendar-app" in sender:
+            # Extract developer number if present
+            if "_" in sender and sender.split("_")[-1].isdigit():
+                dev_num = sender.split("_")[-1]
+                display_name = f"👨‍💻 Dev-{dev_num}"
+            else:
+                display_name = "👨‍💻 Dev"
+        elif "project_manager_project-strangers-calendar-app" in sender:
+            display_name = "👑 User (PM)"
+        elif sender == "user":
+            display_name = "👤 User"
+        elif sender == "system":
+            display_name = "⚙️ Sys Prompt"
         
         # Format the content, handling multi-line content
         content = message["content"].strip()

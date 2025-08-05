@@ -1,0 +1,17 @@
+|
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OAuth Authentication</title>
+</head>
+<body>
+{% if 'user' in session %}
+<h1>Welcome, {{ session['user']['name'] }}!</h1>
+<a href="/logout">Logout</a>
+{% else %}
+<h1>Login with Google</h1>
+<a href="/login">Login with Google</a>
+{% endif %}
+</body>
+</html>

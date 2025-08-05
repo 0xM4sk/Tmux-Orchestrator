@@ -1,16 +1,14 @@
 |
 {
-"name": "Strangers Calendar App",
+"name": "strangers-calendar-app",
 "version": "1.0.0",
-"description": "A calendar application for managing events.",
-"main": "index.js",
+"description": "A calendar application for strangers",
+"main": "app.py",
 "scripts": {
-"test": "jest"
+"test": "python -m unittest discover -s tests"
 },
 "dependencies": {
-"express": "^4.18.2"
-},
-"devDependencies": {
-"jest": "^29.3.1"
+"express": "^4.17.1",
+"flask": "^2.0.1"
 }
 }

@@ -1,0 +1,26 @@
+|
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Events</title>
+</head>
+<body>
+<h1>Events</h1>
+<ul>
+{% for event in events %}
+<li>{{ event.title }} - {{ event.description }}
+{% if current_user.is_authenticated and current_user not in event.registered_users.all() %}
+<form method="post" action="{{ url_for('main.register_event', event_id=event.id) }}">
+<button type="submit">Register</button>
+</form>
+{% elif current_user.is_authenticated and current_user in event.registered_users.all() %}
+<form method="post" action="{{ url_for('main.cancel_registration', event_id=event.id) }}">
+<button type="submit">Cancel Registration</button>
+</form>
+{% endif %}
+</li>
+{% endfor %}
+</ul>
+</body>
+</html>

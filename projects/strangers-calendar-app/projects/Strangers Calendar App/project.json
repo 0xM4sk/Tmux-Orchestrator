@@ -1,0 +1,13 @@
+|
+{
+"project_name": "Strangers Calendar App",
+"team_config": {
+"project_manager": 1,
+"developer": 2,
+"qa": 1
+},
+"dependencies": {
+"backend": ["express", "flask"],
+"frontend": ["react"]
+}
+}
