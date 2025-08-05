@@ -59,8 +59,14 @@ class QwenTmuxOrchestrator(TmuxOrchestrator):
     def start_qwen_agent_in_window(self, session_name: str, window_index: int, agent_id: str):
         """Start a Qwen agent in a specific tmux window"""
         try:
-            # Build command to start the agent
-            cmd = f"python3 qwen_agent.py {agent_id}"
+            # Get agent type to determine which agent script to use
+            agent = self.state_manager.get_agent(agent_id)
+            if agent and agent.agent_type == AgentType.PROJECT_MANAGER:
+                # Use headless agent for project managers
+                cmd = f"python3 headless_agent.py {agent_id}"
+            else:
+                # Use interactive agent for other agent types
+                cmd = f"python3 qwen_agent.py {agent_id}"
             
             # Send command to tmux window
             tmux_cmd = ["tmux", "send-keys", "-t", f"{session_name}:{window_index}", cmd, "C-m"]
@@ -216,27 +222,49 @@ class QwenTmuxOrchestrator(TmuxOrchestrator):
                     # Create window if not the first one
                     if window_index > 0:
                         subprocess.run([
-                            "tmux", "new-window", "-t", session_name, 
+                            "tmux", "new-window", "-t", session_name,
                             "-n", f"{role.title()}-{i+1}" if count > 1 else role.title()
                         ], check=True)
                     else:
                         subprocess.run([
-                            "tmux", "rename-window", "-t", f"{session_name}:0", 
+                            "tmux", "rename-window", "-t", f"{session_name}:0",
                             f"{role.title()}-{i+1}" if count > 1 else role.title()
                         ], check=True)
                     
-                    # Create and start agent
-                    created_id = self.create_agent_in_window(
-                        session_name, window_index, agent_type, agent_id
+                    # Create agent state
+                    created_agent_id = self.state_manager.create_agent(
+                        agent_type, session_name, window_index, agent_id
                     )
                     
+                    # Start the agent in the tmux window
+                    # Use headless agent for project managers, interactive agent for others
+                    try:
+                        if agent_type == AgentType.PROJECT_MANAGER:
+                            # Use headless agent for project managers
+                            cmd = f"python3 headless_agent.py {created_agent_id}"
+                        else:
+                            # Use interactive agent for other agent types
+                            cmd = f"python3 qwen_agent.py {created_agent_id}"
+                        
+                        # Send command to tmux window
+                        tmux_cmd = ["tmux", "send-keys", "-t", f"{session_name}:{window_index}", cmd, "C-m"]
+                        subprocess.run(tmux_cmd, check=True)
+                        
+                        # Wait a moment for the agent to start
+                        time.sleep(2)
+                        
+                        logger.info(f"Started Qwen agent {created_agent_id} in {session_name}:{window_index}")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Error starting agent in tmux window: {e}")
+                        raise
+                    
                     # Set project context
-                    agent = self.state_manager.get_agent(created_id)
+                    agent = self.state_manager.get_agent(created_agent_id)
                     if agent:
                         agent.current_context.active_project = project_name
                         self.state_manager.update_agent(agent)
                     
-                    deployed_agents[f"{role}_{i+1}" if count > 1 else role] = created_id
+                    deployed_agents[f"{role}_{i+1}" if count > 1 else role] = created_agent_id
                     window_index += 1
             
             logger.info(f"Deployed project team for {project_name}: {deployed_agents}")
@@ -318,6 +346,58 @@ class QwenTmuxOrchestrator(TmuxOrchestrator):
             self.qwen_client.close()
         except Exception as e:
             logger.error(f"Error closing connections: {e}")
+    
+    def capture_agent_output(self, session_name: str, window_index: int, num_lines: int = 20) -> str:
+        """Capture the last N lines of output from an agent's tmux pane"""
+        try:
+            # Use the parent class method to capture window content
+            content = self.capture_window_content(session_name, window_index, num_lines)
+            return content
+        except Exception as e:
+            logger.error(f"Error capturing agent output for {session_name}:{window_index}: {e}")
+            return f"Error capturing output: {e}"
+
+    def get_agent_activity_summary(self) -> Dict:
+        """Get a summary of agent activities from their panes"""
+        try:
+            # Get all tmux sessions
+            sessions = self.get_tmux_sessions()
+            
+            # Get agent information
+            active_agents = self.state_manager.get_active_agents()
+            
+            activity_summary = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "agents": []
+            }
+            
+            for agent in active_agents:
+                # Capture last 10 lines of agent output
+                output = self.capture_agent_output(
+                    agent.session_name,
+                    agent.window_index,
+                    10
+                )
+                
+                # Get agent status
+                agent_status = self.get_agent_status_for_window(
+                    agent.session_name,
+                    agent.window_index
+                )
+                
+                activity_summary["agents"].append({
+                    "agent_id": agent.agent_id,
+                    "type": agent.agent_type.value,
+                    "session": f"{agent.session_name}:{agent.window_index}",
+                    "status": agent_status,
+                    "recent_output": output
+                })
+            
+            return activity_summary
+            
+        except Exception as e:
+            logger.error(f"Error getting agent activity summary: {e}")
+            return {"error": str(e), "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 # Utility functions for easy integration
 def create_orchestrator_session(session_name: str = "qwen-orchestrator") -> QwenTmuxOrchestrator:

@@ -122,14 +122,27 @@ class ExecutionProcessor:
             if action_type == 'create_file':
                 file_path = execution_data.get('file_path', '')
                 content = execution_data.get('content', '')
+                project_name = execution_data.get('project_name', '')
                 
-                success = self.executor.create_file(file_path, content)
-                return {
-                    "action_type": "create_file",
-                    "file_path": file_path,
-                    "success": success,
-                    "agent_id": agent_id
-                }
+                # If file_path is empty or equals project_name, it's a directory creation request
+                if not file_path or file_path == project_name:
+                    success = self.executor.create_project_directory(project_name)
+                    return {
+                        "action_type": "create_directory",
+                        "dir_path": f"projects/{project_name}",
+                        "project_name": project_name,
+                        "success": success,
+                        "agent_id": agent_id
+                    }
+                else:
+                    success = self.executor.create_file(file_path, content, project_name)
+                    return {
+                        "action_type": "create_file",
+                        "file_path": file_path,
+                        "project_name": project_name,
+                        "success": success,
+                        "agent_id": agent_id
+                    }
                 
             elif action_type == 'run_command':
                 command = execution_data.get('command', '')
@@ -229,11 +242,13 @@ class ExecutionProcessor:
                 
             elif action_type == 'git_commit':
                 message = execution_data.get('message', '')
-                result = self.executor.git_commit(message)
+                project_name = execution_data.get('project_name', '')
+                result = self.executor.git_commit(message, project_name)
                 
                 return {
                     "action_type": "git_commit",
                     "message": message,
+                    "project_name": project_name,
                     "success": result["success"],
                     "output": result.get("stdout", ""),
                     "agent_id": agent_id
@@ -260,13 +275,16 @@ class ExecutionProcessor:
                 
         except Exception as e:
             logger.error(f"Error executing action {action_type}: {e}")
+            # Request confirmation for failed execution
+            confirmation_id = self.request_execution_confirmation(agent_id, f"execute_{action_type}_failed")
             return {
                 "action_type": action_type,
                 "error": str(e),
                 "success": False,
-                "agent_id": agent_id
+                "agent_id": agent_id,
+                "confirmation_id": confirmation_id
             }
-    
+
     def _create_result_summary(self, result: Dict[str, Any]) -> str:
         """Create a summary of execution results"""
         action_type = result.get('action_type', 'unknown')
@@ -302,9 +320,41 @@ class ExecutionProcessor:
         """Get the execution log from the executor"""
         return self.executor.get_execution_log()
     
+    def get_execution_gaps(self) -> List[Dict]:
+        """Get identified execution gaps"""
+        return self.executor.get_execution_gaps()
+    
+    def get_execution_summary(self) -> Dict:
+        """Get execution summary with gaps information"""
+        return self.executor.get_execution_summary()
+    
+    def request_execution_confirmation(self, agent_id: str, action: str) -> str:
+        """Request confirmation for an execution"""
+        return self.executor.request_execution_confirmation(agent_id, action)
+    
+    def confirm_execution(self, confirmation_id: str, confirmed_by: str = "system") -> bool:
+        """Confirm an execution"""
+        return self.executor.confirm_execution(confirmation_id, confirmed_by)
+    
+    def get_pending_confirmations(self, agent_id: str = None) -> List[Dict]:
+        """Get pending confirmations"""
+        return self.executor.get_pending_confirmations(agent_id)
+    
     def save_execution_log(self, log_file: str = "execution_log.json") -> bool:
         """Save execution log to file"""
         return self.executor.save_execution_log(log_file)
+    
+    def get_error_summary(self) -> Dict:
+        """Get error summary from executor"""
+        return self.executor.get_error_summary()
+    
+    def get_errors_by_agent(self, agent_id: str) -> List[Dict]:
+        """Get errors for a specific agent"""
+        return self.executor.get_errors_by_agent(agent_id)
+    
+    def get_errors_by_action(self, action: str) -> List[Dict]:
+        """Get errors for a specific action"""
+        return self.executor.get_errors_by_action(action)
 
 # Example usage and testing
 if __name__ == "__main__":

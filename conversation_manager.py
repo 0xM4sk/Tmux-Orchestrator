@@ -138,7 +138,7 @@ class ConversationManager:
         # Ensure we don't exceed context window
         return self._trim_to_context_window(messages)
     
-    def send_message_to_agent(self, agent_id: str, content: str, sender: str = "user") -> Optional[str]:
+    def send_message_to_agent(self, agent_id: str, content: str, sender: str = "user", metadata: Optional[Dict] = None) -> Optional[str]:
         """Send a message to an agent and get response"""
         try:
             agent = self.state_manager.get_agent(agent_id)
@@ -148,6 +148,8 @@ class ConversationManager:
             
             # Create user message
             user_message = create_user_message(content)
+            if metadata:
+                user_message.metadata = metadata
             self.add_message(agent_id, user_message)
             
             # Get optimized context for API call

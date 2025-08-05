@@ -20,7 +20,15 @@ from agent_state import AgentStateManager, AgentType, AgentStatus
 from conversation_manager import ConversationManager
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+from agentic_capabilities import log_file_path
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path),
+        logging.StreamHandler() # Also log to console
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class QwenControl:
@@ -43,6 +51,9 @@ class QwenControl:
             # Get Ollama health
             health = self.qwen_client.health_check()
             
+            # Get system resource usage
+            resource_usage = self._get_system_resource_usage()
+            
             # Calculate system metrics
             total_messages = sum(agent.conversation_state.message_count for agent in active_agents)
             total_tokens = sum(agent.conversation_state.total_tokens_used for agent in active_agents)
@@ -61,6 +72,7 @@ class QwenControl:
                     "available_models": health["available_models"],
                     "error": health.get("error")
                 },
+                "system_resources": resource_usage,
                 "agents": {
                     "total_active": len(active_agents),
                     "by_type": self._count_agents_by_type(active_agents),
@@ -299,11 +311,15 @@ Respond with specific, actionable guidance based on the context provided above.
             # Cleanup inactive agents
             inactive_cleaned = self.state_manager.cleanup_inactive_agents()
             
+            # Cleanup orphaned agents (agents with no corresponding tmux sessions)
+            orphaned_cleaned = self.state_manager.cleanup_orphaned_agents()
+            
             # Cleanup old conversations
             old_convs_cleaned = self.conversation_manager.cleanup_old_conversations()
             
             return {
                 "inactive_agents_cleaned": inactive_cleaned,
+                "orphaned_agents_cleaned": orphaned_cleaned,
                 "old_conversations_cleaned": old_convs_cleaned
             }
             
@@ -389,6 +405,103 @@ Respond with specific, actionable guidance based on the context provided above.
         except Exception as e:
             logger.error(f"Error closing connections: {e}")
 
+    def _get_system_resource_usage(self) -> Dict:
+        """Get system resource usage information"""
+        resource_data = {
+            "cpu_usage": "Unknown",
+            "memory_usage": "Unknown",
+            "gpu_usage": "Unknown",
+            "vram_usage": "Unknown"
+        }
+        
+        try:
+            # Get CPU and memory usage
+            mem_result = subprocess.run(["free", "-m"], capture_output=True, text=True, check=True)
+            mem_lines = mem_result.stdout.strip().split('\n')
+            if len(mem_lines) > 1:
+                mem_info = mem_lines[1].split()
+                if len(mem_info) >= 2:
+                    total_mem = int(mem_info[1])
+                    used_mem = int(mem_info[2])
+                    mem_percent = (used_mem / total_mem) * 100 if total_mem > 0 else 0
+                    resource_data["memory_usage"] = f"{used_mem}MB / {total_mem}MB ({mem_percent:.1f}%)"
+            
+            # Get CPU usage
+            cpu_result = subprocess.run(["top", "-bn1"], capture_output=True, text=True, check=True)
+            cpu_lines = cpu_result.stdout.strip().split('\n')
+            for line in cpu_lines:
+                if line.startswith("%Cpu(s):"):
+                    # Parse CPU usage more robustly
+                    # Example line: "%Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"
+                    try:
+                        # Extract idle percentage (id)
+                        parts = line.split()
+                        idle_percent = None
+                        
+                        # Look for the 'id,' part and extract the preceding number
+                        for i, part in enumerate(parts):
+                            if part.endswith('id,'):
+                                # The idle percentage is part of the previous element or a separate element
+                                if i > 0:
+                                    prev_part = parts[i-1]
+                                    # Check if prev_part contains both a number and 'ni,'
+                                    if 'ni,' in prev_part:
+                                        # Extract the number after 'ni,'
+                                        ni_parts = prev_part.split('ni,')
+                                        if len(ni_parts) > 1:
+                                            idle_str = ni_parts[1].rstrip(',')
+                                            if idle_str.replace('.', '').isdigit():
+                                                idle_percent = float(idle_str)
+                                    elif prev_part.replace('.', '').isdigit() or (prev_part.startswith('-') and prev_part[1:].replace('.', '').isdigit()):
+                                        # Previous part is just a number
+                                        idle_str = prev_part.rstrip(',')
+                                        idle_percent = float(idle_str)
+                                break
+                        
+                        if idle_percent is not None:
+                            cpu_percent = 100 - idle_percent
+                            resource_data["cpu_usage"] = f"{cpu_percent:.1f}%"
+                        else:
+                            # Fallback: try to parse with a simpler approach
+                            # Look for pattern like "100.0 id," in any part
+                            for part in parts:
+                                if ' id,' in part and part.split(' id,')[0].replace('.', '').isdigit():
+                                    idle_str = part.split(' id,')[0]
+                                    idle_percent = float(idle_str)
+                                    cpu_percent = 100 - idle_percent
+                                    resource_data["cpu_usage"] = f"{cpu_percent:.1f}%"
+                                    break
+                    except (ValueError, IndexError) as e:
+                        logger.error(f"Error parsing CPU usage from line '{line}': {e}")
+                        # Keep resource_data["cpu_usage"] as "Unknown"
+                    break
+            
+            # Get GPU and VRAM usage if nvidia-smi is available
+            try:
+                gpu_result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, check=True
+                )
+                gpu_lines = gpu_result.stdout.strip().split('\n')
+                if gpu_lines:
+                    gpu_info = gpu_lines[0].split(', ')
+                    if len(gpu_info) >= 3:
+                        vram_used = int(gpu_info[0])
+                        vram_total = int(gpu_info[1])
+                        gpu_util = int(gpu_info[2])
+                        vram_percent = (vram_used / vram_total) * 100 if vram_total > 0 else 0
+                        resource_data["vram_usage"] = f"{vram_used}MB / {vram_total}MB ({vram_percent:.1f}%)"
+                        resource_data["gpu_usage"] = f"{gpu_util}%"
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # nvidia-smi not available or no GPU
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error getting system resource usage: {e}")
+        
+        return resource_data
+
 def print_status(status_data: Dict, detail_level: str = "summary"):
     """Print formatted status information"""
     print(f"\n🤖 Qwen Orchestrator Status - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -403,6 +516,19 @@ def print_status(status_data: Dict, detail_level: str = "summary"):
     
     if health.get("error"):
         print(f"  ⚠️  Error: {health['error']}")
+    
+    # System resources
+    resources = status_data.get("system_resources", {})
+    if resources:
+        print(f"\n📊 System Resources:")
+        if resources.get("cpu_usage") != "Unknown":
+            print(f"  CPU Usage: {resources['cpu_usage']}")
+        if resources.get("memory_usage") != "Unknown":
+            print(f"  Memory Usage: {resources['memory_usage']}")
+        if resources.get("gpu_usage") != "Unknown":
+            print(f"  GPU Usage: {resources['gpu_usage']}")
+        if resources.get("vram_usage") != "Unknown":
+            print(f"  VRAM Usage: {resources['vram_usage']}")
     
     # Agent summary
     agents = status_data.get("agents", {})

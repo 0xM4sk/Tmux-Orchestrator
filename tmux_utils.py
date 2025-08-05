@@ -71,11 +71,33 @@ class TmuxOrchestrator:
             num_lines = self.max_lines_capture
             
         try:
+            # First check if the session exists
+            session_check = ["tmux", "has-session", "-t", session_name]
+            session_result = subprocess.run(session_check, capture_output=True, text=True)
+            
+            if session_result.returncode != 0:
+                return f"Error: Session '{session_name}' does not exist"
+            
+            # Check if the window exists in the session
+            window_check = ["tmux", "list-windows", "-t", session_name, "-F", "#{window_index}"]
+            window_result = subprocess.run(window_check, capture_output=True, text=True, check=True)
+            window_indices = window_result.stdout.strip().split('\n')
+            
+            if str(window_index) not in window_indices:
+                return f"Error: Window '{window_index}' does not exist in session '{session_name}'"
+            
+            # Try to capture the pane content
             cmd = ["tmux", "capture-pane", "-t", f"{session_name}:{window_index}", "-p", "-S", f"-{num_lines}"]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             return result.stdout
         except subprocess.CalledProcessError as e:
-            return f"Error capturing window content: {e}"
+            # Provide more detailed error information
+            error_msg = f"Error capturing window content: {e}"
+            if e.stderr:
+                error_msg += f"\nstderr: {e.stderr}"
+            return error_msg
+        except Exception as e:
+            return f"Unexpected error capturing window content: {e}"
     
     def get_window_info(self, session_name: str, window_index: int) -> Dict:
         """Get detailed information about a specific window"""

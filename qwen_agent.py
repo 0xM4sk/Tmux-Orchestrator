@@ -176,6 +176,9 @@ class QwenAgent:
                 self._set_task(" ".join(cmd_parts[1:]))
             else:
                 print(f"Current task: {self.agent_state.current_context.current_task or 'None'}")
+        elif cmd == "auto-manage" or cmd == "automate":
+            project_name = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else "Strangers Calendar App"
+            self._auto_manage_project(project_name)
         else:
             print(f"❌ Unknown command: {command}")
             self._show_help()
@@ -191,6 +194,7 @@ class QwenAgent:
         print("  /task <desc>   - Set current task")
         print("  /clear         - Clear screen")
         print("  /quit          - Shutdown agent")
+        print("  /auto-manage [project_name] - Auto-manage project from specification")
         print()
     
     def _show_status(self):
@@ -286,7 +290,7 @@ class QwenAgent:
     def _process_message(self, message: str):
         """Process a regular message with autonomous capabilities"""
         try:
-            print(f"\n🤖 Processing...")
+            print(f"\n🤖 Processing message: '{message[:50]}{'...' if len(message) > 50 else ''}")
             
             # Update agent status
             self.agent_state.status = AgentStatus.BUSY
@@ -296,6 +300,7 @@ class QwenAgent:
             enhanced_message = self._enhance_message_with_autonomous_context(message)
             
             # Send enhanced message and get response
+            print("📤 Sending message to Qwen model...")
             response = self.conversation_manager.send_message_to_agent(
                 self.agent_id,
                 enhanced_message,
@@ -303,16 +308,20 @@ class QwenAgent:
             )
             
             if response:
-                print(f"\n🤖 {self.agent_state.agent_type.value.title()}:")
+                print(f"\n🤖 {self.agent_state.agent_type.value.title()} Response:")
                 print(f"{'─'*60}")
                 print(response)
                 print(f"{'─'*60}")
+                
+                # Log what the agent is doing
+                self._log_agent_activity(message, response)
             else:
                 print("❌ Failed to get response from agent")
             
             # Update agent status back to active
             self.agent_state.status = AgentStatus.ACTIVE
             self.state_manager.update_agent(self.agent_state)
+            print(f"✅ Agent status updated to: {self.agent_state.status.value}")
             
         except Exception as e:
             logger.error(f"Error processing message: {e}")
@@ -322,6 +331,42 @@ class QwenAgent:
             self.agent_state.status = AgentStatus.ERROR
             self.agent_state.performance_metrics.last_error = str(e)
             self.state_manager.update_agent(self.agent_state)
+            print(f"⚠️  Agent status updated to: {self.agent_state.status.value}")
+    
+    def _log_agent_activity(self, input_message: str, response: str):
+        """Log agent activity for monitoring purposes"""
+        try:
+            # Determine what the agent is doing based on the response
+            activity = "Processing request"
+            
+            if "implement" in response.lower() or "code" in response.lower():
+                activity = "Implementing solution"
+            elif "test" in response.lower() or "qa" in response.lower():
+                activity = "Testing/QA activities"
+            elif "plan" in response.lower() or "strategy" in response.lower():
+                activity = "Planning/Strategy"
+            elif "review" in response.lower() or "analyze" in response.lower():
+                activity = "Review/Analysis"
+            elif "document" in response.lower() or "spec" in response.lower():
+                activity = "Documentation"
+            elif "research" in response.lower():
+                activity = "Research"
+                
+            print(f"📋 Agent Activity: {activity}")
+            
+            # Update agent context if needed
+            if self.agent_state.current_context.current_task is None:
+                # Try to extract task from response
+                if "task" in response.lower():
+                    # Simple extraction - in a real implementation, you might want more sophisticated parsing
+                    lines = response.split('\n')
+                    for line in lines:
+                        if "task" in line.lower() and ":" in line:
+                            task_desc = line.split(":", 1)[1].strip()
+                            self._set_task(task_desc[:100] + "..." if len(task_desc) > 100 else task_desc)
+                            break
+        except Exception as e:
+            logger.error(f"Error logging agent activity: {e}")
     
     def _enhance_message_with_autonomous_context(self, message: str) -> str:
         """Enhance message with autonomous capabilities and file context"""
@@ -398,6 +443,175 @@ Respond with specific, actionable guidance based on the context provided above.
 """
         
         return enhanced_message
+    
+    def _auto_expand_project_spec(self, project_name: str = "Strangers Calendar App") -> list:
+        """Automatically expand project specification into task list"""
+        try:
+            # Read the project specification
+            spec_path = Path("project_spec.md")
+            if not spec_path.exists():
+                logger.warning("Project specification not found")
+                return []
+            
+            with open(spec_path, 'r') as f:
+                spec_content = f.read()
+            
+            # Generate system prompt for task expansion
+            task_expansion_prompt = f"""
+            You are an AI Project Manager. Your task is to automatically expand the following project specification into a detailed task list.
+            
+            PROJECT SPECIFICATION:
+            {spec_content}
+            
+            INSTRUCTIONS:
+            1. Break down the specification into specific, actionable tasks
+            2. Prioritize tasks logically (foundational work first)
+            3. Assign tasks to appropriate agent types (developer, qa, project_manager)
+            4. Include implementation, testing, and documentation tasks
+            5. Consider the constraints and deliverables mentioned
+            6. Format each task as: "[AGENT_TYPE] Task description"
+            
+            Example format:
+            [developer] Implement OAuth authentication endpoints for Google and Apple
+            [developer] Create database schema for temporary calendars
+            [qa] Write tests for OAuth authentication
+            [developer] Implement phone number and WhatsApp integration
+            [developer] Create UI for availability window input
+            [developer] Implement availability intersection algorithm
+            [developer] Create automatic expiration and cleanup functionality
+            [qa] Write tests for calendar creation and sharing
+            [qa] Write tests for availability intersection algorithm
+            [developer] Create documentation for API endpoints
+            [project_manager] Review and update project status
+            
+            Provide ONLY the task list, one task per line, in priority order.
+            """
+            
+            # Get tasks from Qwen
+            tasks_response = self.qwen_client.chat_completion(
+                messages=[{"role": "user", "content": task_expansion_prompt}],
+                stream=False
+            )
+            
+            if tasks_response and "choices" in tasks_response:
+                tasks_content = tasks_response["choices"][0]["message"]["content"]
+                # Parse tasks from response
+                tasks = [task.strip() for task in tasks_content.split('\n') if task.strip() and task.startswith('[')]
+                return tasks
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error expanding project spec: {e}")
+            return []
+    
+    def _assign_tasks_to_agents(self, tasks: list, project_name: str) -> dict:
+        """Assign tasks to existing or newly created agents"""
+        try:
+            assigned_tasks = {}
+            
+            # Get existing agents
+            existing_agents = self.state_manager.get_active_agents()
+            agent_by_type = {}
+            
+            for agent in existing_agents:
+                agent_type = agent.agent_type.value
+                if agent_type not in agent_by_type:
+                    agent_by_type[agent_type] = []
+                agent_by_type[agent_type].append(agent.agent_id)
+            
+            # Assign tasks to agents
+            for task in tasks:
+                if task.startswith('[') and ']' in task:
+                    # Extract agent type from task
+                    end_bracket = task.find(']')
+                    agent_type = task[1:end_bracket].lower()
+                    task_description = task[end_bracket + 1:].strip()
+                    
+                    # If no agent of this type exists, create one
+                    if agent_type not in agent_by_type or not agent_by_type[agent_type]:
+                        # Create new agent
+                        new_agent_id = f"{agent_type}_{project_name.lower().replace(' ', '-')}"
+                        create_result = self.state_manager.create_agent(
+                            AgentType(agent_type),
+                            f"project-{project_name.lower().replace(' ', '-')}",
+                            len(agent_by_type.get(agent_type, [])) + 1,
+                            new_agent_id
+                        )
+                        
+                        if create_result:
+                            if agent_type not in agent_by_type:
+                                agent_by_type[agent_type] = []
+                            agent_by_type[agent_type].append(new_agent_id)
+                            logger.info(f"Created new {agent_type} agent: {new_agent_id}")
+                    
+                    # Assign task to first available agent of this type
+                    if agent_type in agent_by_type and agent_by_type[agent_type]:
+                        agent_id = agent_by_type[agent_type][0]
+                        if agent_id not in assigned_tasks:
+                            assigned_tasks[agent_id] = []
+                        assigned_tasks[agent_id].append(task_description)
+                        logger.info(f"Assigned task to {agent_id}: {task_description}")
+            
+            return assigned_tasks
+            
+        except Exception as e:
+            logger.error(f"Error assigning tasks to agents: {e}")
+            return {}
+    
+    def _auto_manage_project(self, project_name: str = "Strangers Calendar App"):
+        """Automatically manage project from specification to completion"""
+        try:
+            print(f"\n🚀 Auto-managing project: {project_name}")
+            print("📝 Expanding project specification into tasks...")
+            
+            # Expand project specification into tasks
+            tasks = self._auto_expand_project_spec(project_name)
+            
+            if not tasks:
+                print("❌ Failed to expand project specification into tasks")
+                return
+            
+            print(f"✅ Generated {len(tasks)} tasks from project specification")
+            
+            # Assign tasks to agents
+            print("🤖 Assigning tasks to agents...")
+            assigned_tasks = self._assign_tasks_to_agents(tasks, project_name)
+            
+            if not assigned_tasks:
+                print("❌ Failed to assign tasks to agents")
+                return
+            
+            print(f"✅ Assigned tasks to {len(assigned_tasks)} agents")
+            
+            # Send tasks to agents
+            for agent_id, agent_tasks in assigned_tasks.items():
+                print(f"\n📧 Sending {len(agent_tasks)} tasks to {agent_id}:")
+                for i, task in enumerate(agent_tasks, 1):
+                    print(f"   {i}. {task}")
+                    
+                    # Send task to agent
+                    try:
+                        response = self.conversation_manager.send_message_to_agent(
+                            agent_id,
+                            f"Please work on this task: {task}",
+                            sender="project_manager"
+                        )
+                        if response:
+                            print(f"   ✅ Task sent to {agent_id}")
+                        else:
+                            print(f"   ❌ Failed to send task to {agent_id}")
+                    except Exception as e:
+                        logger.error(f"Error sending task to {agent_id}: {e}")
+                        print(f"   ❌ Error sending task to {agent_id}: {e}")
+            
+            print(f"\n✅ Project management complete for {project_name}")
+            print("Agents are now working on their assigned tasks.")
+            print("Use the dashboard to monitor progress.")
+            
+        except Exception as e:
+            logger.error(f"Error in auto-manage project: {e}")
+            print(f"❌ Error in auto-manage project: {e}")
     
     def shutdown(self):
         """Shutdown the agent gracefully"""

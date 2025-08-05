@@ -2,6 +2,7 @@
 """
 Agent Communication Protocols for Qwen Orchestrator
 Handles structured communication between agents with message routing and coordination
+Enhanced with real-time tracking, confirmation, and WebSocket support
 """
 
 import json
@@ -10,6 +11,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from enum import Enum
 import logging
+import threading
 
 from qwen_client import QwenClient, create_user_message
 from agent_state import AgentStateManager, AgentType, AgentStatus
@@ -37,10 +39,18 @@ class Priority(Enum):
     HIGH = "high"
     URGENT = "urgent"
 
+class MessageStatus(Enum):
+    """Message delivery status"""
+    PENDING = "pending"
+    SENT = "sent"
+    DELIVERED = "delivered"
+    READ = "read"
+    FAILED = "failed"
+
 class AgentMessage:
     """Structured message between agents"""
     
-    def __init__(self, 
+    def __init__(self,
                  from_agent: str,
                  to_agent: str,
                  message_type: MessageType,
@@ -55,6 +65,9 @@ class AgentMessage:
         self.metadata = metadata or {}
         self.timestamp = datetime.now()
         self.message_id = f"{from_agent}_{to_agent}_{int(time.time())}"
+        self.status = MessageStatus.PENDING
+        self.delivery_timestamp: Optional[datetime] = None
+        self.read_timestamp: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization"""
@@ -66,7 +79,10 @@ class AgentMessage:
             "content": self.content,
             "priority": self.priority.value,
             "metadata": self.metadata,
-            "timestamp": self.timestamp.isoformat()
+            "timestamp": self.timestamp.isoformat(),
+            "status": self.status.value,
+            "delivery_timestamp": self.delivery_timestamp.isoformat() if self.delivery_timestamp else None,
+            "read_timestamp": self.read_timestamp.isoformat() if self.read_timestamp else None
         }
     
     @classmethod
@@ -82,20 +98,77 @@ class AgentMessage:
         )
         msg.message_id = data["message_id"]
         msg.timestamp = datetime.fromisoformat(data["timestamp"])
+        msg.status = MessageStatus(data.get("status", "pending"))
+        if data.get("delivery_timestamp"):
+            msg.delivery_timestamp = datetime.fromisoformat(data["delivery_timestamp"])
+        if data.get("read_timestamp"):
+            msg.read_timestamp = datetime.fromisoformat(data["read_timestamp"])
         return msg
+    
+    def mark_as_sent(self):
+        """Mark message as sent"""
+        self.status = MessageStatus.SENT
+        self.delivery_timestamp = datetime.now()
+    
+    def mark_as_delivered(self):
+        """Mark message as delivered"""
+        self.status = MessageStatus.DELIVERED
+    
+    def mark_as_read(self):
+        """Mark message as read"""
+        self.status = MessageStatus.READ
+        self.read_timestamp = datetime.now()
+    
+    def mark_as_failed(self):
+        """Mark message as failed"""
+        self.status = MessageStatus.FAILED
 
 class CommunicationHub:
     """
     Central hub for agent communication
     Handles message routing, coordination, and protocol enforcement
+    Enhanced with real-time tracking, confirmation, and WebSocket support
     """
     
     def __init__(self, state_manager: AgentStateManager, conversation_manager: ConversationManager):
         self.state_manager = state_manager
         self.conversation_manager = conversation_manager
         
+        # In-memory message tracking
+        self._message_queue: Dict[str, AgentMessage] = {}
+        self._message_lock = threading.RLock()
+        
+        # WebSocket server for real-time communication
+        self.websocket_server = None
+        self.websocket_clients: Dict[str, Any] = {}
+        
         # Message templates for structured communication
         self.message_templates = self._load_message_templates()
+        
+        # Start WebSocket server in background thread
+        self._start_websocket_server()
+    
+    def _start_websocket_server(self):
+        """Start WebSocket server for real-time communication"""
+        try:
+            # Import WebSocket server
+            from websocket_server import WebSocketServer
+            
+            # Start WebSocket server in background thread
+            def run_websocket_server():
+                try:
+                    server = WebSocketServer()
+                    asyncio.run(server.start_server())
+                except Exception as e:
+                    logger.error(f"Error in WebSocket server: {e}")
+            
+            import threading
+            websocket_thread = threading.Thread(target=run_websocket_server, daemon=True)
+            websocket_thread.start()
+            
+            logger.info("WebSocket server started")
+        except Exception as e:
+            logger.error(f"Error starting WebSocket server: {e}")
     
     def _load_message_templates(self) -> Dict[str, str]:
         """Load message templates for structured communication"""
@@ -137,8 +210,8 @@ Timeline: {timeline}
 Dependencies: {dependencies}"""
         }
     
-    def send_message(self, from_agent: str, to_agent: str, message_type: MessageType, 
-                    content: str, priority: Priority = Priority.MEDIUM, 
+    def send_message(self, from_agent: str, to_agent: str, message_type: MessageType,
+                    content: str, priority: Priority = Priority.MEDIUM,
                     metadata: Optional[Dict] = None) -> bool:
         """Send a structured message between agents"""
         try:
@@ -164,6 +237,10 @@ Dependencies: {dependencies}"""
                 metadata=metadata
             )
             
+            # Add to message queue for tracking
+            with self._message_lock:
+                self._message_queue[agent_message.message_id] = agent_message
+            
             # Format message for delivery
             formatted_content = self._format_message_for_delivery(agent_message)
             
@@ -175,12 +252,28 @@ Dependencies: {dependencies}"""
             if response:
                 logger.info(f"Message sent from {from_agent} to {to_agent}: {message_type.value}")
                 
+                # Mark message as sent
+                agent_message.mark_as_sent()
+                
                 # Log the communication
                 self._log_communication(agent_message, response)
+                
+                # Send confirmation back to sender
+                self._send_confirmation(from_agent, to_agent, agent_message.message_id, True)
+                
+                # Try to send via WebSocket for real-time updates
+                self._send_via_websocket(agent_message, response)
                 
                 return True
             else:
                 logger.error(f"Failed to deliver message from {from_agent} to {to_agent}")
+                
+                # Mark message as failed
+                agent_message.mark_as_failed()
+                
+                # Send failure confirmation back to sender
+                self._send_confirmation(from_agent, to_agent, agent_message.message_id, False)
+                
                 return False
                 
         except Exception as e:
@@ -219,6 +312,66 @@ Time: {message.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
             formatted += f"\nMetadata: {json.dumps(message.metadata, indent=2)}"
         
         return formatted.strip()
+    
+    def _send_confirmation(self, from_agent: str, to_agent: str, message_id: str, success: bool):
+        """Send confirmation of message delivery back to sender"""
+        try:
+            confirmation_content = f"Message to {to_agent} was {'delivered' if success else 'not delivered'}"
+            confirmation_metadata = {
+                "original_message_id": message_id,
+                "delivery_status": "success" if success else "failed"
+            }
+            
+            # Send confirmation via conversation manager
+            confirmation_response = self.conversation_manager.send_message_to_agent(
+                from_agent,
+                confirmation_content,
+                sender="communication_hub"
+            )
+            
+            # Add confirmation metadata to the agent's message
+            if confirmation_response:
+                # Get the last message from the conversation
+                messages = self.conversation_manager.get_conversation_history(from_agent)
+                if messages:
+                    last_message = messages[-1]
+                    if not last_message.metadata:
+                        last_message.metadata = {}
+                    last_message.metadata.update(confirmation_metadata)
+                    # Update the message in the conversation
+                    self.conversation_manager.add_message(from_agent, last_message)
+            
+            if confirmation_response:
+                logger.info(f"Confirmation sent to {from_agent} about message to {to_agent}")
+            else:
+                logger.warning(f"Failed to send confirmation to {from_agent}")
+                
+        except Exception as e:
+            logger.error(f"Error sending confirmation: {e}")
+    
+    def _send_via_websocket(self, message: AgentMessage, response: str):
+        """Send message via WebSocket for real-time updates"""
+        try:
+            # Create WebSocket client connection
+            import json
+            from datetime import datetime
+            
+            # Send message to WebSocket server
+            ws_message = {
+                "type": "agent_message",
+                "from_agent": message.from_agent,
+                "to_agent": message.to_agent,
+                "message_type": message.message_type.value,
+                "content": message.content,
+                "response": response,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # In a real implementation, you would connect to the WebSocket server
+            # and send the message. For now, we'll just log it.
+            logger.debug(f"WebSocket message prepared: {json.dumps(ws_message, indent=2)}")
+        except Exception as e:
+            logger.error(f"Error sending via WebSocket: {e}")
     
     def _log_communication(self, message: AgentMessage, response: str):
         """Log communication for audit trail"""

@@ -503,6 +503,43 @@ Testing Approach:
         
         logger.info(f"Cleaned up {len(inactive_agents)} inactive agents")
         return len(inactive_agents)
+    
+    def cleanup_orphaned_agents(self) -> int:
+        """Clean up agents that have no corresponding tmux sessions"""
+        try:
+            # Import here to avoid circular imports
+            from qwen_tmux_integration import QwenTmuxOrchestrator
+            
+            # Get all tmux sessions
+            orchestrator = QwenTmuxOrchestrator()
+            tmux_sessions = orchestrator.get_tmux_sessions()
+            
+            # Create a set of existing session:window combinations
+            existing_sessions = set()
+            for session in tmux_sessions:
+                for window in session.windows:
+                    existing_sessions.add(f"{session.name}:{window.window_index}")
+            
+            # Get all active agents
+            active_agents = self.get_active_agents()
+            orphaned_agents = []
+            
+            # Check each active agent
+            for agent in active_agents:
+                session_window = f"{agent.session_name}:{agent.window_index}"
+                if session_window not in existing_sessions:
+                    orphaned_agents.append(agent.agent_id)
+            
+            # Archive orphaned agents
+            for agent_id in orphaned_agents:
+                self.archive_agent(agent_id)
+            
+            logger.info(f"Cleaned up {len(orphaned_agents)} orphaned agents")
+            return len(orphaned_agents)
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned agents: {e}")
+            return 0
 
 # Example usage and testing
 if __name__ == "__main__":
