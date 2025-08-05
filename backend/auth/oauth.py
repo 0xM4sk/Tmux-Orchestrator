@@ -1,37 +1,21 @@
 |
-from flask import Flask, request, redirect, url_for, session
-from functools import wraps
-
+from flask import Flask, request, redirect
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
 
-# Placeholder for Google OAuth logic
-@app.route('/auth/google')
-def google_auth():
-pass
+@app.route('/login')
+def login():
+return '<button id="google">Google</button><button id="apple">Apple</button>'
 
-# Placeholder for Apple OAuth logic
-@app.route('/auth/apple')
-def apple_auth():
-pass
+@app.route('/auth/google', methods=['GET'])
+def auth_google():
+if request.method == 'GET':
+return redirect('https://accounts.google.com/o/oauth2/auth')
+else:
+return 'Method Not Allowed', 405
 
-# Decorator to require Google OAuth authentication
-def google_auth_required(f):
-@wraps(f)
-def decorated_function(*args, **kwargs):
-if 'google_token' not in session:
-return redirect(url_for('google_auth'))
-return f(*args, **kwargs)
-return decorated_function
-
-# Decorator to require Apple OAuth authentication
-def apple_auth_required(f):
-@wraps(f)
-def decorated_function(*args, **kwargs):
-if 'apple_token' not in session:
-return redirect(url_for('apple_auth'))
-return f(*args, **kwargs)
-return decorated_function
-
-if __name__ == '__main__':
-app.run(debug=True)
+@app.route('/auth/apple', methods=['GET'])
+def auth_apple():
+if request.method == 'GET':
+return redirect('https://appleid.apple.com/auth/authorize')
+else:
+return 'Method Not Allowed', 405

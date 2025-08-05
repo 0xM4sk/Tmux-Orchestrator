@@ -1,34 +1,32 @@
 |
-from flask import Flask, request, redirect, session
-from authlib.integrations.flask_client import OAuth
+# Authentication routes
+from flask import Flask, redirect, url_for, session
+from .auth.google import google
+from .auth.apple import apple
 
-app = Flask(__name__)
-oauth = OAuth(app)
-
-google = oauth.register(
-name='google',
-client_id='your-google-client-id',
-client_secret='your-google-client-secret',
-access_token_url='https://accounts.google.com/o/oauth2/token',
-access_token_params=None,
-authorize_url='https://accounts.google.com/o/oauth2/auth',
-authorize_params=None,
-api_base_url='https://www.googleapis.com/oauth2/v1/',
-client_kwargs={'scope': 'openid profile email'},
-)
-
-@app.route('/login')
-def login():
-redirect_uri = url_for('authorize', _external=True)
+@app.route('/login/google')
+def login_google():
+redirect_uri = url_for('authorize', provider='google', _external=True)
 return google.authorize_redirect(redirect_uri)
 
-@app.route('/authorize')
-def authorize():
+@app.route('/login/apple')
+def login_apple():
+redirect_uri = url_for('authorize', provider='apple', _external=True)
+return apple.authorize_redirect(redirect_uri)
+
+@app.route('/authorize/<provider>')
+def authorize(provider):
+if provider == 'google':
 token = google.authorize_access_token()
 resp = google.get('userinfo')
 user_info = resp.json()
+# Handle Google authentication
 session['user'] = user_info
-return 'Logged in as: ' + user_info.get('email')
-
-if __name__ == '__main__':
-app.run(debug=True)
+return redirect(url_for('home'))
+elif provider == 'apple':
+token = apple.authorize_access_token()
+resp = apple.get('userinfo')
+user_info = resp.json()
+# Handle Apple authentication
+session['user'] = user_info
+return redirect(url_for('home'))
