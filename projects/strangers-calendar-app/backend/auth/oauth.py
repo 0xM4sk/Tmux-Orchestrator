@@ -1,25 +1,33 @@
 |
-# OAuth authentication implementation
-from flask import Flask, request, redirect
+from flask import Blueprint, redirect, url_for, request
+from authlib.integrations.flask_client import OAuth
 
-app = Flask(__name__)
+oauth = OAuth()
+google = oauth.register(
+name='google',
+client_id='YOUR_GOOGLE_CLIENT_ID',
+client_secret='YOUR_GOOGLE_CLIENT_SECRET',
+access_token_url='https://accounts.google.com/o/oauth2/token',
+access_token_params=None,
+authorize_url='https://accounts.google.com/o/oauth2/auth',
+authorize_params=None,
+api_base_url='https://www.googleapis.com/oauth2/v1/',
+client_kwargs={'scope': 'openid email profile'},
+)
 
-@app.route('/auth/google')
-def google_auth():
-return redirect('https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=YOUR_GOOGLE_CLIENT_ID&redirect_uri=http%3A//localhost:5000/callback/google')
+oauth_bp = Blueprint('oauth', __name__)
 
-@app.route('/callback/google')
-def google_callback():
-code = request.args.get('code')
-# Exchange the authorization code for an access token
-return f"Code received: {code}"
+@oauth_bp.route('/login')
+def login():
+redirect_uri = url_for('oauth.authorize_access_token', _external=True)
+return google.authorize_redirect(redirect_uri)
 
-@app.route('/auth/apple')
-def apple_auth():
-return redirect('https://appleid.apple.com/auth/authorize?response_type=code&client_id=YOUR_APPLE_CLIENT_ID&redirect_uri=http%3A//localhost:5000/callback/apple')
+@oauth_bp.route('/authorize-access-token')
+def authorize_access_token():
+token_response = google.authorize_access_token()
+resp = google.get('userinfo')
+user_info = resp.json()
+# Handle the user information
+return redirect(url_for('index'))
 
-@app.route('/callback/apple')
-def apple_callback():
-code = request.args.get('code')
-# Exchange the authorization code for an access token
-return f"Code received: {code}"
+oauth_bp.register_blueprint(oauth_bp)
