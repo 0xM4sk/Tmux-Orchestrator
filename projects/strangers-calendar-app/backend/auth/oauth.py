@@ -1,47 +1,25 @@
 |
 # OAuth authentication implementation
-from flask import Flask, request, redirect, url_for, session
-from authlib.integrations.flask_client import OAuth
+from flask import Flask, request, redirect
 
 app = Flask(__name__)
-oauth = OAuth(app)
 
-google = oauth.register(
-name='google',
-client_id='YOUR_GOOGLE_CLIENT_ID',
-client_secret='YOUR_GOOGLE_CLIENT_SECRET',
-access_token_url='https://accounts.google.com/o/oauth2/token',
-access_token_params=None,
-authorize_url='https://accounts.google.com/o/oauth2/auth',
-authorize_params=None,
-api_base_url='https://www.googleapis.com/oauth2/v1/',
-client_kwargs={'scope': 'openid email profile'},
-)
+@app.route('/auth/google')
+def google_auth():
+return redirect('https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=YOUR_GOOGLE_CLIENT_ID&redirect_uri=http%3A//localhost:5000/callback/google')
 
-apple = oauth.register(
-name='apple',
-client_id='YOUR_APPLE_CLIENT_ID',
-client_secret=None,
-access_token_url='https://appleid.apple.com/auth/token',
-access_token_params=None,
-authorize_url='https://appleid.apple.com/auth/authorize',
-authorize_params=None,
-api_base_url='https://appleid.apple.com/',
-client_kwargs={'scope': 'name email'},
-)
+@app.route('/callback/google')
+def google_callback():
+code = request.args.get('code')
+# Exchange the authorization code for an access token
+return f"Code received: {code}"
 
-@app.route('/login/google')
-def login_google():
-redirect_uri = url_for('authorize', _external=True)
-return google.authorize_redirect(redirect_uri)
+@app.route('/auth/apple')
+def apple_auth():
+return redirect('https://appleid.apple.com/auth/authorize?response_type=code&client_id=YOUR_APPLE_CLIENT_ID&redirect_uri=http%3A//localhost:5000/callback/apple')
 
-@app.route('/oauth/callback/google')
-def authorize():
-token = google.authorize_access_token()
-resp = google.get('userinfo')
-user_info = resp.json()
-session['user'] = user_info
-return 'Logged in successfully!'
-
-if __name__ == '__main__':
-app.run(debug=True)
+@app.route('/callback/apple')
+def apple_callback():
+code = request.args.get('code')
+# Exchange the authorization code for an access token
+return f"Code received: {code}"
