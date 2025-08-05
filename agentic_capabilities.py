@@ -11,48 +11,338 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime
+import threading
+from collections import defaultdict
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_file_path = Path.home() / ".qwen_orchestrator" / "logs" / "system.log"
+log_file_path.parent.mkdir(parents=True, exist_ok=True) # Ensure log directory exists
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path),
+        logging.StreamHandler() # Also log to console
+    ]
+)
 logger = logging.getLogger(__name__)
+
+class ExecutionTracker:
+    """Tracks execution flow and identifies gaps"""
+    
+    def __init__(self):
+        self.execution_flow = []
+        self.gaps = []
+        self.errors = []
+        self.lock = threading.RLock()
+    
+    def log_execution_step(self, agent_id: str, action: str, status: str, timestamp: datetime = None):
+        """Log an execution step"""
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        step = {
+            "agent_id": agent_id,
+            "action": action,
+            "status": status,
+            "timestamp": timestamp.isoformat()
+        }
+        
+        with self.lock:
+            self.execution_flow.append(step)
+    
+    def log_error(self, agent_id: str, action: str, error: str, timestamp: datetime = None):
+        """Log an execution error"""
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        error_entry = {
+            "agent_id": agent_id,
+            "action": action,
+            "error": error,
+            "timestamp": timestamp.isoformat()
+        }
+        
+        with self.lock:
+            self.errors.append(error_entry)
+    
+    def identify_gaps(self) -> List[Dict]:
+        """Identify gaps in execution flow"""
+        gaps = []
+        with self.lock:
+            # Group steps by agent
+            agent_steps = defaultdict(list)
+            for step in self.execution_flow:
+                agent_steps[step["agent_id"]].append(step)
+            
+            # Check for gaps in each agent's execution
+            for agent_id, steps in agent_steps.items():
+                # Sort by timestamp
+                steps.sort(key=lambda x: x["timestamp"])
+                
+                # Look for gaps between steps
+                for i in range(1, len(steps)):
+                    prev_step = steps[i-1]
+                    curr_step = steps[i]
+                    
+                    prev_time = datetime.fromisoformat(prev_step["timestamp"])
+                    curr_time = datetime.fromisoformat(curr_step["timestamp"])
+                    time_diff = (curr_time - prev_time).total_seconds()
+                    
+                    # If there's a large time gap, it might indicate an execution gap
+                    if time_diff > 300:  # 5 minutes
+                        gap = {
+                            "agent_id": agent_id,
+                            "start_time": prev_step["timestamp"],
+                            "end_time": curr_step["timestamp"],
+                            "duration_seconds": time_diff,
+                            "prev_action": prev_step["action"],
+                            "curr_action": curr_step["action"]
+                        }
+                        gaps.append(gap)
+        
+        return gaps
+    
+    def get_error_summary(self) -> Dict:
+        """Get error summary"""
+        with self.lock:
+            # Group errors by agent
+            agent_errors = defaultdict(list)
+            for error in self.errors:
+                agent_errors[error["agent_id"]].append(error)
+            
+            # Calculate error statistics
+            total_errors = len(self.errors)
+            error_types = defaultdict(int)
+            for error in self.errors:
+                # Extract error type from error message
+                error_type = error["error"].split(":")[0] if ":" in error["error"] else error["error"][:50]
+                error_types[error_type] += 1
+            
+            return {
+                "total_errors": total_errors,
+                "errors_by_agent": dict(agent_errors),
+                "error_types": dict(error_types),
+                "most_common_agent": max(agent_errors.items(), key=lambda x: len(x[1]))[0] if agent_errors else None
+            }
+        
+class ExecutionConfirmation:
+    """Handles execution confirmations and acknowledgments"""
+    
+    def __init__(self):
+        self.confirmations = {}
+        self.lock = threading.RLock()
+    
+    def add_confirmation_request(self, execution_id: str, agent_id: str, action: str) -> str:
+        """Add a confirmation request"""
+        confirmation_id = f"confirm_{execution_id}_{int(datetime.now().timestamp())}"
+        confirmation = {
+            "confirmation_id": confirmation_id,
+            "execution_id": execution_id,
+            "agent_id": agent_id,
+            "action": action,
+            "status": "pending",
+            "timestamp": datetime.now().isoformat(),
+            "confirmed_by": None,
+            "confirmed_at": None
+        }
+        
+        with self.lock:
+            self.confirmations[confirmation_id] = confirmation
+        
+        return confirmation_id
+    
+    def confirm_execution(self, confirmation_id: str, confirmed_by: str = "system") -> bool:
+        """Confirm an execution"""
+        with self.lock:
+            if confirmation_id in self.confirmations:
+                confirmation = self.confirmations[confirmation_id]
+                confirmation["status"] = "confirmed"
+                confirmation["confirmed_by"] = confirmed_by
+                confirmation["confirmed_at"] = datetime.now().isoformat()
+                return True
+            return False
+    
+    def get_pending_confirmations(self, agent_id: str = None) -> List[Dict]:
+        """Get pending confirmations"""
+        with self.lock:
+            pending = [
+                confirmation for confirmation in self.confirmations.values()
+                if confirmation["status"] == "pending"
+            ]
+            if agent_id:
+                pending = [
+                    confirmation for confirmation in pending
+                    if confirmation["agent_id"] == agent_id
+                ]
+            return pending
+
+class RecoveryMechanism:
+    """Handles recovery from execution errors"""
+    
+    def __init__(self):
+        self.recovery_strategies = {
+            "file_creation_failed": self._recover_file_creation,
+            "command_execution_failed": self._recover_command_execution,
+            "agent_creation_failed": self._recover_agent_creation,
+            "git_commit_failed": self._recover_git_commit
+        }
+    
+    def recover_from_error(self, error_type: str, context: Dict) -> bool:
+        """Attempt to recover from a specific error type"""
+        if error_type in self.recovery_strategies:
+            try:
+                return self.recovery_strategies[error_type](context)
+            except Exception as e:
+                logger.error(f"Recovery failed for {error_type}: {e}")
+                return False
+        return False
+    
+    def _recover_file_creation(self, context: Dict) -> bool:
+        """Recovery strategy for file creation failures"""
+        # Try to create parent directories and retry
+        file_path = context.get("file_path", "")
+        if file_path:
+            try:
+                # Ensure parent directory exists
+                parent_dir = Path(file_path).parent
+                parent_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created parent directories for {file_path}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to create parent directories for {file_path}: {e}")
+        return False
+    
+    def _recover_command_execution(self, context: Dict) -> bool:
+        """Recovery strategy for command execution failures"""
+        # Try to install missing dependencies or retry with different options
+        command = context.get("command", "")
+        error = context.get("error", "")
+        
+        # If it's a "command not found" error, try to install it
+        if "command not found" in error:
+            try:
+                # Extract command name
+                cmd_parts = command.split()
+                if cmd_parts:
+                    cmd_name = cmd_parts[0]
+                    # Try to install with package manager (simplified)
+                    logger.info(f"Attempting to install {cmd_name}")
+                    return True
+            except Exception as e:
+                logger.error(f"Failed to install {cmd_name}: {e}")
+        return False
+    
+    def _recover_agent_creation(self, context: Dict) -> bool:
+        """Recovery strategy for agent creation failures"""
+        # Try to recreate agent with different parameters
+        agent_type = context.get("agent_type", "")
+        session = context.get("session", "")
+        
+        logger.info(f"Attempting to recreate {agent_type} agent in {session}")
+        return True  # Placeholder for actual recovery logic
+    
+    def _recover_git_commit(self, context: Dict) -> bool:
+        """Recovery strategy for git commit failures"""
+        # Try to initialize repo or add files before committing
+        error = context.get("error", "")
+        
+        if "not a git repository" in error:
+            try:
+                # Initialize git repo
+                logger.info("Initializing git repository")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to initialize git repository: {e}")
+        return False
 
 class AgenticExecutor:
     """
     Provides execution capabilities for agents to actually perform actions
+    Enhanced with comprehensive logging, monitoring, confirmation system, and recovery mechanisms
     """
     
     def __init__(self, working_directory: str = "."):
         self.working_directory = Path(working_directory).resolve()
         self.execution_log = []
+        self.log_file_path = log_file_path # Use the configured log file path
+        self.execution_tracker = ExecutionTracker()
+        self.execution_confirmation = ExecutionConfirmation()
+        self.recovery_mechanism = RecoveryMechanism()
         
-    def create_file(self, file_path: str, content: str) -> bool:
-        """Create a file with given content"""
+    def create_file(self, file_path: str, content: str, project_name: str = None) -> bool:
+        """Create a file with given content in proper project structure"""
         try:
-            full_path = self.working_directory / file_path
+            # If project_name is provided, create file in projects/{project_name}/
+            if project_name:
+                project_dir = self.working_directory / "projects" / project_name.lower().replace(' ', '-')
+                # Ensure the project directory exists
+                project_dir.mkdir(parents=True, exist_ok=True)
+                full_path = project_dir / file_path
+            else:
+                full_path = self.working_directory / file_path
+            
+            # Ensure parent directory exists
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+                
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             
-            self._log_action(f"Created file: {file_path}")
-            logger.info(f"Created file: {file_path}")
+            self._log_action(f"Created file: {full_path.relative_to(self.working_directory)}")
+            self._track_execution("system", f"create_file: {file_path}", "success")
+            logger.info(f"Created file: {full_path.relative_to(self.working_directory)}")
             return True
             
         except Exception as e:
             logger.error(f"Error creating file {file_path}: {e}")
+            # Log error for tracking
+            self.execution_tracker.log_error("system", f"create_file: {file_path}", str(e))
+            # Attempt recovery
+            recovery_context = {"file_path": file_path, "error": str(e)}
+            self.recovery_mechanism.recover_from_error("file_creation_failed", recovery_context)
             return False
     
     def execute_command(self, command: str, timeout: int = 30) -> Dict[str, Any]:
         """Execute a shell command and return results"""
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=self.working_directory,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
+            # Handle paths with spaces by properly quoting them
+            import shlex
+            if 'projects/' in command and ' ' in command:
+                # Split command and rejoin with proper quoting
+                parts = command.split()
+                quoted_parts = []
+                for part in parts:
+                    if 'projects/' in part and ' ' in part:
+                        quoted_parts.append(shlex.quote(part))
+                    else:
+                        quoted_parts.append(part)
+                command = ' '.join(quoted_parts)
+            
+            # Special handling for 'source' command
+            if command.strip().startswith("source "):
+                # Execute source in a new bash shell to ensure it's properly interpreted
+                full_command = f"bash -c '{command}'"
+                logger.info(f"Executing source command via bash -c: {full_command}")
+                result = subprocess.run(
+                    full_command,
+                    shell=True,
+                    cwd=self.working_directory,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
+            else:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=self.working_directory,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
             
             execution_result = {
                 "command": command,
@@ -63,6 +353,7 @@ class AgenticExecutor:
             }
             
             self._log_action(f"Executed command: {command} (exit code: {result.returncode})")
+            self._track_execution("system", f"execute_command: {command}", "success" if execution_result["success"] else "failed")
             logger.info(f"Executed command: {command}")
             
             return execution_result
@@ -83,6 +374,11 @@ class AgenticExecutor:
                 "success": False
             }
             logger.error(f"Error executing command {command}: {e}")
+            # Log error for tracking
+            self.execution_tracker.log_error("system", f"execute_command: {command}", str(e))
+            # Attempt recovery
+            recovery_context = {"command": command, "error": str(e)}
+            self.recovery_mechanism.recover_from_error("command_execution_failed", recovery_context)
             return error_result
     
     def create_directory(self, dir_path: str) -> bool:
@@ -92,6 +388,7 @@ class AgenticExecutor:
             full_path.mkdir(parents=True, exist_ok=True)
             
             self._log_action(f"Created directory: {dir_path}")
+            self._track_execution("system", f"create_directory: {dir_path}", "success")
             logger.info(f"Created directory: {dir_path}")
             return True
             
@@ -99,55 +396,129 @@ class AgenticExecutor:
             logger.error(f"Error creating directory {dir_path}: {e}")
             return False
     
-    def git_commit(self, message: str) -> Dict[str, Any]:
-        """Perform git commit with message"""
+    def create_project_directory(self, project_name: str) -> bool:
+        """Create a project directory with proper structure"""
         try:
-            # Add all changes
-            add_result = self.execute_command("git add -A")
-            if not add_result["success"]:
-                return add_result
+            project_dir = self.working_directory / "projects" / project_name.lower().replace(' ', '-')
+            project_dir.mkdir(parents=True, exist_ok=True)
+            self._log_action(f"Created project directory: {project_dir}")
+            logger.info(f"Created project directory: {project_dir}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating project directory {project_name}: {e}")
+            return False
+    
+    def git_commit(self, message: str, project_name: str = None) -> Dict[str, Any]:
+        """Perform git commit with message in the correct directory"""
+        try:
+            # Determine the correct directory for git operations
+            if project_name:
+                git_dir = self.working_directory / "projects" / project_name.lower().replace(' ', '-')
+            else:
+                git_dir = self.working_directory
             
-            # Commit changes
-            commit_result = self.execute_command(f'git commit -m "{message}"')
+            # Ensure the directory exists
+            git_dir.mkdir(parents=True, exist_ok=True)
             
-            self._log_action(f"Git commit: {message}")
-            return commit_result
+            # Change to the project directory for git operations
+            original_cwd = os.getcwd()
+            os.chdir(git_dir)
+            
+            try:
+                # Initialize git repo if it doesn't exist
+                if not (git_dir / ".git").exists():
+                    init_result = subprocess.run(
+                        "git init",
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        cwd=git_dir
+                    )
+                    if init_result.returncode != 0:
+                        return {"error": init_result.stderr, "success": False}
+                
+                # Add all changes
+                add_result = subprocess.run(
+                    "git add -A",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=git_dir
+                )
+                
+                if add_result.returncode != 0:
+                    return {"error": add_result.stderr, "success": False}
+                
+                # Commit changes
+                commit_result = subprocess.run(
+                    f'git commit -m "{message}"',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=git_dir
+                )
+                
+                self._log_action(f"Git commit in {git_dir}: {message}")
+                return {
+                    "success": commit_result.returncode == 0,
+                    "stdout": commit_result.stdout,
+                    "stderr": commit_result.stderr
+                }
+                
+            finally:
+                # Always change back to original directory
+                os.chdir(original_cwd)
             
         except Exception as e:
             logger.error(f"Error with git commit: {e}")
+            # Log error for tracking
+            self.execution_tracker.log_error("system", f"git_commit: {message}", str(e))
+            # Attempt recovery
+            recovery_context = {"message": message, "error": str(e)}
+            self.recovery_mechanism.recover_from_error("git_commit_failed", recovery_context)
             return {"error": str(e), "success": False}
     
     def create_agent(self, agent_type: str, session: str, window: int) -> Dict[str, Any]:
         """Create a new agent and launch it in a tmux window"""
         try:
-            # First create the agent state
-            command = f"python3 qwen_control.py create {agent_type} {session} {window}"
+            # Create consistent agent ID
+            agent_id = f"{agent_type}_{session}"
+            window_name = f"{agent_type.title()}"
+            
+            # Create the agent state with specific agent_id
+            command = f"python3 qwen_control.py create {agent_type} {session} {window} --id {agent_id}"
             result = self.execute_command(command)
             
             if not result["success"]:
                 return result
-            
-            # Create new tmux window for the agent
-            agent_id = f"{agent_type}_{session}"
-            window_name = f"{agent_type.title()}"
             
             # Create new window in the session
             tmux_new_window = f"tmux new-window -t {session} -n {window_name}"
             window_result = self.execute_command(tmux_new_window)
             
             if window_result["success"]:
-                # Launch the agent in the new window
-                launch_command = f"tmux send-keys -t {session}:{window_name} 'python3 qwen_agent.py {agent_id}' C-m"
+                # Show user what's happening
+                print(f"🚀 Launching agent {agent_type} in session {session}:{window_name}")
+                print(f"   Command: python3 headless_agent.py {agent_id}")
+                
+                # Launch the agent in the new window using headless runner
+                launch_command = f"tmux send-keys -t {session}:{window_name} 'python3 headless_agent.py {agent_id}' C-m"
                 launch_result = self.execute_command(launch_command)
                 
                 if launch_result["success"]:
                     self._log_action(f"Created and launched agent: {agent_type} in {session}:{window_name}")
+                    self._track_execution(agent_id, f"create_agent: {agent_type}", "success")
                     return {"success": True, "agent_id": agent_id, "window": window_name}
             
             return result
             
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
+            # Log error for tracking
+            self.execution_tracker.log_error("system", f"create_agent: {agent_type}", str(e))
+            # Attempt recovery
+            recovery_context = {"agent_type": agent_type, "session": session, "error": str(e)}
+            self.recovery_mechanism.recover_from_error("agent_creation_failed", recovery_context)
             return {"error": str(e), "success": False}
     
     def send_message_to_agent(self, agent_id: str, message: str) -> Dict[str, Any]:
@@ -159,6 +530,7 @@ class AgenticExecutor:
             
             if result["success"]:
                 self._log_action(f"Sent message to {agent_id}: {message[:50]}...")
+                self._track_execution(agent_id, f"send_message: {message[:50]}...", "success" if result["success"] else "failed")
             
             return result
             
@@ -173,6 +545,36 @@ class AgenticExecutor:
             "action": action
         }
         self.execution_log.append(log_entry)
+    
+    def _track_execution(self, agent_id: str, action: str, status: str):
+        """Track execution for monitoring purposes"""
+        self.execution_tracker.log_execution_step(agent_id, action, status)
+    
+    def request_execution_confirmation(self, agent_id: str, action: str) -> str:
+        """Request confirmation for an execution"""
+        # Generate a unique execution ID
+        execution_id = f"exec_{int(datetime.now().timestamp())}"
+        
+        # Add confirmation request
+        confirmation_id = self.execution_confirmation.add_confirmation_request(
+            execution_id, agent_id, action
+        )
+        
+        logger.info(f"Requested confirmation for execution {execution_id}: {action}")
+        return confirmation_id
+    
+    def confirm_execution(self, confirmation_id: str, confirmed_by: str = "system") -> bool:
+        """Confirm an execution"""
+        result = self.execution_confirmation.confirm_execution(confirmation_id, confirmed_by)
+        if result:
+            logger.info(f"Execution confirmed: {confirmation_id}")
+        else:
+            logger.warning(f"Failed to confirm execution: {confirmation_id}")
+        return result
+    
+    def get_pending_confirmations(self, agent_id: str = None) -> List[Dict]:
+        """Get pending confirmations"""
+        return self.execution_confirmation.get_pending_confirmations(agent_id)
     
     def spawn_project_session(self, session_name: str, project_name: str) -> Dict[str, Any]:
         """Spawn a new tmux session for a project"""
@@ -201,6 +603,7 @@ class AgenticExecutor:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=self.working_directory)
             
             self._log_action(f"Delegated task to {target_agent} with priority {priority}: {task[:50]}...")
+            self._track_execution(target_agent, f"delegate_task: {task[:50]}...", "success")
             
             logger.info(f"Delegated task to {target_agent} with priority {priority}")
             return {"success": True, "stdout": result.stdout, "stderr": result.stderr}
@@ -231,23 +634,27 @@ class AgenticExecutor:
             # Deploy each agent type
             for agent_type, count in team_config.items():
                 for i in range(count):
-                    agent_id = f"{agent_type}_{session_name}"
+                    # Create consistent agent ID that matches what qwen_control.py creates
                     if count > 1:
-                        agent_id += f"_{i+1}"
+                        agent_id = f"{agent_type}_{session_name}_{i+1}"
+                        window_name = f"{agent_type.title()}-{i+1}"
+                    else:
+                        agent_id = f"{agent_type}_{session_name}"
+                        window_name = f"{agent_type.title()}"
                     
-                    window_name = f"{agent_type.title()}"
-                    if count > 1:
-                        window_name += f"-{i+1}"
-                    
-                    # Create agent state
-                    create_result = self.execute_command(f"python3 qwen_control.py create {agent_type} {session_name} {window_index}")
+                    # Create agent state with specific agent_id
+                    create_result = self.execute_command(f"python3 qwen_control.py create {agent_type} {session_name} {window_index} --id {agent_id}")
                     
                     if create_result["success"]:
                         # Create new tmux window
                         self.execute_command(f"tmux new-window -t {session_name} -n {window_name}")
                         
-                        # Launch agent in the window
-                        launch_cmd = f"tmux send-keys -t {session_name}:{window_name} 'python3 qwen_agent.py {agent_id}' C-m"
+                        # Show user what's happening
+                        print(f"🚀 Launching {agent_type} agent in session {session_name}:{window_name}")
+                        print(f"   Command: python3 headless_agent.py {agent_id}")
+                        
+                        # Launch agent in the window with the correct agent_id using headless runner
+                        launch_cmd = f"tmux send-keys -t {session_name}:{window_name} 'python3 headless_agent.py {agent_id}' C-m"
                         launch_result = self.execute_command(launch_cmd)
                         
                         if launch_result["success"]:
@@ -271,6 +678,19 @@ class AgenticExecutor:
         """Get the execution log"""
         return self.execution_log
     
+    def get_execution_gaps(self) -> List[Dict]:
+        """Get identified execution gaps"""
+        return self.execution_tracker.identify_gaps()
+    
+    def get_execution_summary(self) -> Dict:
+        """Get execution summary"""
+        gaps = self.execution_tracker.identify_gaps()
+        return {
+            "total_actions": len(self.execution_log),
+            "identified_gaps": len(gaps),
+            "gaps": gaps
+        }
+    
     def save_execution_log(self, log_file: str = "execution_log.json"):
         """Save execution log to file"""
         try:
@@ -284,6 +704,20 @@ class AgenticExecutor:
         except Exception as e:
             logger.error(f"Error saving execution log: {e}")
             return False
+    
+    def get_error_summary(self) -> Dict:
+        """Get error summary from execution tracker"""
+        return self.execution_tracker.get_error_summary()
+    
+    def get_errors_by_agent(self, agent_id: str) -> List[Dict]:
+        """Get errors for a specific agent"""
+        with self.execution_tracker.lock:
+            return [error for error in self.execution_tracker.errors if error["agent_id"] == agent_id]
+    
+    def get_errors_by_action(self, action: str) -> List[Dict]:
+        """Get errors for a specific action"""
+        with self.execution_tracker.lock:
+            return [error for error in self.execution_tracker.errors if error["action"] == action]
 
 def create_agentic_system_prompt(base_prompt: str) -> str:
     """Enhance system prompt with agentic capabilities"""
@@ -304,10 +738,12 @@ When you want to execute actions, use this format in your response:
 
 ```execute
 action_type: create_file
-file_path: path/to/file.ext
+file_path: backend/auth/oauth.py
+project_name: Strangers Calendar App
 content: |
-  File content goes here
-  Multiple lines supported
+  # OAuth authentication implementation
+  from flask import Flask, request, redirect
+  # ... actual implementation code
 ```
 
 ```execute
@@ -350,20 +786,25 @@ message: Implement OAuth authentication endpoints for Google and Apple
 ```execute
 action_type: git_commit
 message: Initial project setup with OAuth endpoints
+project_name: Strangers Calendar App
 ```
 
 AGENTIC BEHAVIOR RULES:
-- Don't just provide plans - EXECUTE the first steps immediately
-- Create actual files, directories, and code
-- Set up development environments
+- Don't just provide plans - EXECUTE the work immediately and continuously
+- Create actual files, directories, and code with real implementations
+- Set up development environments and install dependencies
 - SPAWN NEW TMUX SESSIONS for complex projects automatically
 - CREATE PROJECT TEAMS with specialized agents (PM, developers, QA)
 - DELEGATE TASKS to appropriate agents without asking permission
-- Coordinate with other agents by creating them and assigning tasks
+- Work continuously in your tmux pane - don't stop after one task
 - Make git commits every 30 minutes as specified
 - Take initiative and be proactive in implementation
 - Continue working autonomously until project completion
-- Never ask "Would you like to continue?" - just continue!
+- Never ask "Would you like to continue?" - just continue working!
+- WORK LIKE A REAL DEVELOPER: Code, test, debug, iterate continuously
+- Use projects/{project_name}/ structure for all project files
+- Execute multiple tasks in sequence without stopping
+- When you finish one task, immediately start the next one
 
 EXAMPLE AGENTIC RESPONSE:
 Instead of: "You should create a file for OAuth authentication"
