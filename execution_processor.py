@@ -28,6 +28,46 @@ class ExecutionProcessor:
             re.DOTALL | re.MULTILINE
         )
     
+    def _discover_agents(self) -> List[Dict[str, Any]]:
+        """Discover available agents using qwen_control.py"""
+        try:
+            import subprocess
+            import json
+            
+            # Run qwen_control.py list command to get available agents
+            result = subprocess.run(
+                ["python3", "qwen_control.py", "list"],
+                capture_output=True,
+                text=True,
+                cwd=self.executor.working_directory
+            )
+            
+            if result.returncode == 0:
+                # Parse the output to extract agent information
+                # This is a simplified parser - in a real implementation,
+                # we might want to use the JSON output option
+                lines = result.stdout.strip().split('\n')
+                agents = []
+                
+                # Look for lines that contain agent information
+                for line in lines:
+                    if ' - ' in line and '(' in line and ')' in line:
+                        # This looks like an agent line
+                        # Extract agent ID (first part before space)
+                        parts = line.split()
+                        if parts:
+                            agent_id = parts[0]
+                            agents.append({"agent_id": agent_id})
+                
+                return agents
+            else:
+                logger.error(f"Error discovering agents: {result.stderr}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error discovering agents: {e}")
+            return []
+    
     def process_response(self, response: str, agent_id: str) -> Dict[str, Any]:
         """
         Process an agent response and execute any agentic commands
@@ -230,12 +270,31 @@ class ExecutionProcessor:
             elif action_type == 'send_message':
                 target_agent = execution_data.get('agent_id', '')
                 message = execution_data.get('message', '')
+                project_name = execution_data.get('project_name', '')
                 
-                result = self.executor.send_message_to_agent(target_agent, message)
+                # Validate target agent
+                if not target_agent or target_agent == '[discovered_agent_id]':
+                    # Discover available agents
+                    available_agents = self._discover_agents()
+                    if available_agents:
+                        # Suggest the first available agent as an example
+                        suggested_agent = available_agents[0]['agent_id']
+                        error_msg = f"Invalid agent ID. Available agents: {[a['agent_id'] for a in available_agents]}. Example: {suggested_agent}"
+                    else:
+                        error_msg = "No agents found. Use 'python3 qwen_control.py list' to see available agents."
+                    return {
+                        "action_type": "send_message",
+                        "error": error_msg,
+                        "success": False,
+                        "agent_id": agent_id
+                    }
+                
+                result = self.executor.send_message_to_agent(target_agent, message, project_name)
                 return {
                     "action_type": "send_message",
                     "target_agent": target_agent,
                     "message": message,
+                    "project_name": project_name,
                     "success": result["success"],
                     "agent_id": agent_id
                 }
@@ -305,9 +364,13 @@ class ExecutionProcessor:
                 agents = result.get('deployed_agents', {})
                 return f"✅ **EXECUTED**: Created project team for `{result.get('project_name', '')}` with {len(agents)} agents"
             elif action_type == 'send_message':
-                return f"✅ **EXECUTED**: Sent message to {result.get('target_agent', '')}"
+                if 'error' in result:
+                    return f"❌ **EXECUTION FAILED**: {action_type} - {result['error']}"
+                project_info = f" for project `{result.get('project_name', '')}`" if result.get('project_name') else ""
+                return f"✅ **EXECUTED**: Sent message to {result.get('target_agent', '')}{project_info}"
             elif action_type == 'git_commit':
-                return f"✅ **EXECUTED**: Git commit: {result.get('message', '')}"
+                project_info = f" for project `{result.get('project_name', '')}`" if result.get('project_name') else ""
+                return f"✅ **EXECUTED**: Git commit{project_info}: {result.get('message', '')}"
             elif action_type == 'create_directory':
                 return f"✅ **EXECUTED**: Created directory `{result.get('dir_path', '')}`"
             else:

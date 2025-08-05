@@ -23,6 +23,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_PATH="${SCRIPT_DIR}"
 LOG_FILE="${HOME}/.tmux_orchestrator/logs/message_log.txt"
 
+# Project context (if provided)
+PROJECT_NAME="${PROJECT_NAME:-}"
+
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
 

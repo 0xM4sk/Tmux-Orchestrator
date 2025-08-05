@@ -22,7 +22,7 @@ from conversation_manager import ConversationManager
 # Configure logging
 from agentic_capabilities import log_file_path
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Changed from INFO to WARNING to suppress INFO messages
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file_path),
@@ -305,23 +305,38 @@ Respond with specific, actionable guidance based on the context provided above.
             logger.error(f"Error archiving agent {agent_id}: {e}")
             return False
     
+    def set_agent_project(self, agent_id: str, project_name: str) -> bool:
+        """Set the project context for an agent"""
+        try:
+            agent = self.state_manager.get_agent(agent_id)
+            if not agent:
+                logger.error(f"Agent {agent_id} not found")
+                return False
+            
+            agent.current_context.active_project = project_name
+            self.state_manager.update_agent(agent)
+            logger.info(f"Set project context for agent {agent_id} to {project_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting project context for agent {agent_id}: {e}")
+            return False
+    
     def cleanup_system(self) -> Dict[str, int]:
         """Perform system cleanup"""
         try:
-            # Cleanup inactive agents
-            inactive_cleaned = self.state_manager.cleanup_inactive_agents()
-            
-            # Cleanup orphaned agents (agents with no corresponding tmux sessions)
-            orphaned_cleaned = self.state_manager.cleanup_orphaned_agents()
+            # Perform aggressive cleanup
+            cleanup_results = self.state_manager.aggressive_cleanup()
             
             # Cleanup old conversations
             old_convs_cleaned = self.conversation_manager.cleanup_old_conversations()
             
-            return {
-                "inactive_agents_cleaned": inactive_cleaned,
-                "orphaned_agents_cleaned": orphaned_cleaned,
-                "old_conversations_cleaned": old_convs_cleaned
-            }
+            # Combine results
+            if "error" in cleanup_results:
+                return cleanup_results
+            
+            cleanup_results["old_conversations_cleaned"] = old_convs_cleaned
+            return cleanup_results
             
         except Exception as e:
             logger.error(f"Error during system cleanup: {e}")
@@ -550,7 +565,23 @@ def print_status(status_data: Dict, detail_level: str = "summary"):
     if detail_level == "detailed" and "agent_details" in status_data:
         print(f"\n📋 Agent Details:")
         for agent in status_data["agent_details"]:
-            print(f"  {agent['agent_id']} ({agent['type']}):")
+            # Make agent names more human-friendly
+            friendly_name = agent['agent_id']
+            if friendly_name.startswith("developer_project-"):
+                # Extract developer number if present
+                if "_" in friendly_name and friendly_name.split("_")[-1].isdigit():
+                    dev_num = friendly_name.split("_")[-1]
+                    friendly_name = f"👨‍💻 Dev-{dev_num}"
+                else:
+                    friendly_name = "👨‍💻 Developer"
+            elif friendly_name.startswith("project_manager_"):
+                friendly_name = "👑 Project Manager"
+            elif friendly_name.startswith("qa_"):
+                friendly_name = "🕵️ QA Engineer"
+            elif friendly_name == "orchestrator":
+                friendly_name = "🧭 Orchestrator"
+                
+            print(f"  {friendly_name} ({agent['type']}):")
             print(f"    Session: {agent['session']}")
             print(f"    Status: {agent['status']}")
             print(f"    Messages: {agent['messages']}")
@@ -597,11 +628,20 @@ def main():
     archive_parser = subparsers.add_parser("archive", help="Archive agent")
     archive_parser.add_argument("agent_id", help="Agent ID")
     
+    # Set agent project command
+    set_project_parser = subparsers.add_parser("set-project", help="Set project context for agent")
+    set_project_parser.add_argument("agent_id", help="Agent ID")
+    set_project_parser.add_argument("project", help="Project name")
+    
     # Cleanup command
     subparsers.add_parser("cleanup", help="Perform system cleanup")
     
     # Health check command
     subparsers.add_parser("health", help="Perform health check")
+    
+    # Migrate command
+    migrate_parser = subparsers.add_parser("migrate", help="Migrate from Claude system")
+    migrate_parser.add_argument("claude_logs_dir", help="Path to Claude logs directory")
     
     args = parser.parse_args()
     
@@ -623,9 +663,64 @@ def main():
         elif args.command == "list":
             agents = control.list_agents(args.session)
             if agents:
-                print(f"\n📋 Agents{' in ' + args.session if args.session else ''}:")
+                # Group agents by project
+                projects = {}
+                unassigned_agents = []
+                
                 for agent in agents:
-                    print(f"  {agent['agent_id']} ({agent['type']}) - {agent['session']} - {agent['status']}")
+                    project = agent.get('current_project')
+                    if project:
+                        if project not in projects:
+                            projects[project] = []
+                        projects[project].append(agent)
+                    else:
+                        unassigned_agents.append(agent)
+                
+                print(f"\n📋 Agents{' in ' + args.session if args.session else ''}:")
+                
+                # Print agents grouped by project
+                for project, project_agents in projects.items():
+                    print(f"\n  📁 Project: {project}")
+                    for agent in project_agents:
+                        # Make agent names more human-friendly
+                        friendly_name = agent['agent_id']
+                        if friendly_name.startswith("developer_project-"):
+                            # Extract developer number if present
+                            if "_" in friendly_name and friendly_name.split("_")[-1].isdigit():
+                                dev_num = friendly_name.split("_")[-1]
+                                friendly_name = f"👨‍💻 Dev-{dev_num}"
+                            else:
+                                friendly_name = "👨‍💻 Developer"
+                        elif friendly_name.startswith("project_manager_"):
+                            friendly_name = "👑 Project Manager"
+                        elif friendly_name.startswith("qa_"):
+                            friendly_name = "🕵️ QA Engineer"
+                        elif friendly_name == "orchestrator":
+                            friendly_name = "🧭 Orchestrator"
+                        
+                        print(f"    {friendly_name} ({agent['type']}) - {agent['session']} - {agent['status']}")
+                
+                # Print unassigned agents
+                if unassigned_agents:
+                    print(f"\n  📁 Unassigned Agents:")
+                    for agent in unassigned_agents:
+                        # Make agent names more human-friendly
+                        friendly_name = agent['agent_id']
+                        if friendly_name.startswith("developer_project-"):
+                            # Extract developer number if present
+                            if "_" in friendly_name and friendly_name.split("_")[-1].isdigit():
+                                dev_num = friendly_name.split("_")[-1]
+                                friendly_name = f"👨‍💻 Dev-{dev_num}"
+                            else:
+                                friendly_name = "👨‍💻 Developer"
+                        elif friendly_name.startswith("project_manager_"):
+                            friendly_name = "👑 Project Manager"
+                        elif friendly_name.startswith("qa_"):
+                            friendly_name = "🕵️ QA Engineer"
+                        elif friendly_name == "orchestrator":
+                            friendly_name = "🧭 Orchestrator"
+                        
+                        print(f"    {friendly_name} ({agent['type']}) - {agent['session']} - {agent['status']}")
             else:
                 print("No agents found")
         
@@ -664,7 +759,24 @@ def main():
             else:
                 print(f"✅ Cleanup complete:")
                 print(f"  Inactive agents cleaned: {result['inactive_agents_cleaned']}")
+                print(f"  Orphaned agents cleaned: {result['orphaned_agents_cleaned']}")
+                print(f"  Duplicate agents cleaned: {result['duplicate_agents_cleaned']}")
                 print(f"  Old conversations cleaned: {result['old_conversations_cleaned']}")
+        
+        elif args.command == "set-project":
+            if control.set_agent_project(args.agent_id, args.project):
+                print(f"✅ Set project for agent {args.agent_id} to {args.project}")
+            else:
+                print(f"❌ Failed to set project for agent {args.agent_id}")
+        
+        elif args.command == "migrate":
+            result = control.migrate_from_claude(args.claude_logs_dir)
+            if "error" in result:
+                print(f"❌ Migration error: {result['error']}")
+            else:
+                print(f"✅ Migration complete:")
+                print(f"  Agents migrated: {result['migrated_agents']}")
+                print(f"  Conversations migrated: {result['migrated_conversations']}")
         
         elif args.command == "health":
             health_data = control.health_check()

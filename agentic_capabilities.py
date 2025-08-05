@@ -521,11 +521,16 @@ class AgenticExecutor:
             self.recovery_mechanism.recover_from_error("agent_creation_failed", recovery_context)
             return {"error": str(e), "success": False}
     
-    def send_message_to_agent(self, agent_id: str, message: str) -> Dict[str, Any]:
-        """Send message to another agent"""
+    def send_message_to_agent(self, agent_id: str, message: str, project_name: str = None) -> Dict[str, Any]:
+        """Send message to another agent with optional project context"""
         try:
-            # Use the send-qwen-message.sh script
-            command = f'./send-qwen-message.sh {agent_id} "{message}"'
+            # Set project context if provided
+            env_vars = ""
+            if project_name:
+                env_vars = f"PROJECT_NAME='{project_name}' "
+            
+            # Use the send-qwen-message.sh script with environment variables
+            command = f'{env_vars}./send-qwen-message.sh {agent_id} "{message}"'
             result = self.execute_command(command)
             
             if result["success"]:
@@ -779,8 +784,9 @@ priority: high
 
 ```execute
 action_type: send_message
-agent_id: dev_project
+agent_id: [discovered_agent_id]
 message: Implement OAuth authentication endpoints for Google and Apple
+project_name: Strangers Calendar App
 ```
 
 ```execute
@@ -798,6 +804,7 @@ AGENTIC BEHAVIOR RULES:
 - DELEGATE TASKS to appropriate agents without asking permission
 - Work continuously in your tmux pane - don't stop after one task
 - Make git commits every 30 minutes as specified
+- Use project context when sending messages to other agents for proper file path resolution
 - Take initiative and be proactive in implementation
 - Continue working autonomously until project completion
 - Never ask "Would you like to continue?" - just continue working!
@@ -805,6 +812,12 @@ AGENTIC BEHAVIOR RULES:
 - Use projects/{project_name}/ structure for all project files
 - Execute multiple tasks in sequence without stopping
 - When you finish one task, immediately start the next one
+
+DISCOVERING AVAILABLE AGENTS:
+Before sending messages to agents, you should discover which agents are available:
+1. Use the command: `python3 qwen_control.py list` to see all active agents
+2. Use the command: `python3 qwen_control.py list --session <session_name>` to filter by session
+3. Use the command: `python3 qwen_control.py info <agent_id>` to get detailed information about a specific agent
 
 EXAMPLE AGENTIC RESPONSE:
 Instead of: "You should create a file for OAuth authentication"
