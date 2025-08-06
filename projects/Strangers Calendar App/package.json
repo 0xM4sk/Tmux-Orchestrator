@@ -2,15 +2,18 @@
 {
 "name": "strangers-calendar-app",
 "version": "1.0.0",
-"description": "A calendar app with OAuth authentication for Google and Apple.",
+"description": "",
 "main": "index.js",
 "scripts": {
 "test": "jest"
 },
+"keywords": [],
+"author": "",
+"license": "ISC",
 "dependencies": {
-"express": "^4.17.1",
-"passport": "^0.6.0",
-"passport-google-oauth20": "^2.0.0",
-"passport-apple-oauth2": "^2.0.0"
+"express": "^4.17.1"
+},
+"devDependencies": {
+"jest": "^28.0.0"
 }
 }
