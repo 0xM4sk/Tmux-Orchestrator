@@ -1,32 +1,151 @@
 #!/usr/bin/env python3
 """
 Agentic Capabilities for Qwen Orchestrator
-Adds execution capabilities so agents can actually DO things, not just provide advice
+Provides execution capabilities with comprehensive sandboxing and security
 """
 
 import os
 import subprocess
 import json
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 import logging
-from datetime import datetime
 import threading
-from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+import functools
 
 # Configure logging
-log_file_path = Path.home() / ".qwen_orchestrator" / "logs" / "system.log"
-log_file_path.parent.mkdir(parents=True, exist_ok=True) # Ensure log directory exists
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file_path),
-        logging.StreamHandler() # Also log to console
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global log file path
+log_file_path = os.path.expanduser("~/.tmux_orchestrator/agentic_execution.log")
+
+class PathValidator:
+    """
+    Validates file paths to ensure agents only operate within their designated boundaries
+    """
+    
+    def __init__(self, allowed_base_path: str, agent_id: str = None):
+        self.allowed_base_path = Path(allowed_base_path).resolve()
+        self.agent_id = agent_id
+        self.logger = logging.getLogger(f"path_validator.{agent_id or 'system'}")
+        
+    def validate_path(self, target_path: str) -> bool:
+        """
+        Validates that a target path is within the allowed base path
+        """
+        try:
+            target = Path(target_path).resolve()
+            target.relative_to(self.allowed_base_path)
+            return True
+        except (ValueError, RuntimeError):
+            self.logger.warning(f"Path validation failed: {target_path} is outside allowed boundary {self.allowed_base_path}")
+            return False
+    
+    def safe_join(self, *paths) -> str:
+        """
+        Safely joins paths and validates the result
+        """
+        joined_path = Path(self.allowed_base_path, *paths)
+        if self.validate_path(str(joined_path)):
+            return str(joined_path)
+        else:
+            raise PermissionError(f"Path {joined_path} is outside allowed boundary for agent {self.agent_id}")
+    
+    def get_allowed_paths(self) -> List[str]:
+        """
+        Returns list of allowed paths for this agent
+        """
+        return [str(self.allowed_base_path)]
+
+class FileAccessMonitor:
+    """
+    Monitors and logs all file access attempts
+    """
+    
+    def __init__(self):
+        self.logger = logging.getLogger("file_access_monitor")
+        self.logger.setLevel(logging.INFO)
+        
+        # Create log file handler
+        log_dir = Path(log_file_path).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_handler = logging.FileHandler(log_file_path)
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        
+    def log_access(self, agent_id: str, operation: str, filepath: str, allowed: bool = True):
+        """Log file access attempt"""
+        status = "ALLOWED" if allowed else "DENIED"
+        self.logger.info(f"[{agent_id}] {status} {operation} on {filepath}")
+        
+        if not allowed:
+            self.logger.warning(f"SECURITY VIOLATION: Agent {agent_id} attempted {operation} on {filepath}")
+    
+    def check_and_log(self, agent_id: str, operation: str, filepath: str, validator: PathValidator) -> bool:
+        """Check if access is allowed and log the attempt"""
+        allowed = validator.validate_path(filepath)
+        self.log_access(agent_id, operation, filepath, allowed)
+        return allowed
+
+class BoundaryViolationAlert:
+    """
+    Handles alerts for boundary violations
+    """
+    
+    def __init__(self):
+        self.logger = logging.getLogger("boundary_violation")
+        
+    def send_alert(self, agent_id: str, operation: str, filepath: str, violation_details: str):
+        """Send alert for boundary violation"""
+        alert_message = f"""
+        BOUNDARY VIOLATION DETECTED
+        Agent: {agent_id}
+        Operation: {operation}
+        Target Path: {filepath}
+        Details: {violation_details}
+        Time: {datetime.now().isoformat()}
+        """
+        
+        self.logger.critical(alert_message)
+        
+        # Also log to the main execution log
+        logger.critical(f"SECURITY VIOLATION: {alert_message}")
+
+def enforce_path_boundaries(allowed_base_path: str, agent_id: str = None):
+    """
+    Decorator to enforce path boundaries on file operations
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            validator = PathValidator(allowed_base_path, agent_id)
+            monitor = FileAccessMonitor()
+            
+            # Check args for path-like arguments
+            validated_args = []
+            for arg in args:
+                if isinstance(arg, (str, Path)):
+                    if not monitor.check_and_log(agent_id or "system", func.__name__, str(arg), validator):
+                        alert = BoundaryViolationAlert()
+                        alert.send_alert(
+                            agent_id or "system",
+                            func.__name__,
+                            str(arg),
+                            "Attempted access outside allowed boundaries"
+                        )
+                        raise PermissionError(f"Access to {arg} is not allowed for agent {agent_id}")
+                    validated_args.append(arg)
+                else:
+                    validated_args.append(arg)
+            
+            return func(*validated_args, **kwargs)
+        return wrapper
+    return decorator
 
 class ExecutionTracker:
     """Tracks execution flow and identifies gaps"""
@@ -260,19 +379,37 @@ class RecoveryMechanism:
 class AgenticExecutor:
     """
     Provides execution capabilities for agents to actually perform actions
-    Enhanced with comprehensive logging, monitoring, confirmation system, and recovery mechanisms
+    Enhanced with comprehensive sandboxing, logging, monitoring, confirmation system, and recovery mechanisms
     """
     
-    def __init__(self, working_directory: str = "."):
+    def __init__(self, working_directory: str = ".", agent_id: str = None, project_name: str = None):
         self.working_directory = Path(working_directory).resolve()
+        self.agent_id = agent_id or "system"
+        self.project_name = project_name
+        
+        # Set up sandboxing based on project
+        if project_name:
+            # Agent is working on a specific project - restrict to project directory
+            self.allowed_base_path = self.working_directory / "projects" / project_name.lower().replace(' ', '-')
+        else:
+            # System agent - restrict to working directory only
+            self.allowed_base_path = self.working_directory
+        
+        # Initialize path validator and monitor
+        self.path_validator = PathValidator(str(self.allowed_base_path), self.agent_id)
+        self.file_monitor = FileAccessMonitor()
+        self.boundary_alert = BoundaryViolationAlert()
+        
         self.execution_log = []
-        self.log_file_path = log_file_path # Use the configured log file path
+        self.log_file_path = log_file_path
         self.execution_tracker = ExecutionTracker()
         self.execution_confirmation = ExecutionConfirmation()
         self.recovery_mechanism = RecoveryMechanism()
         
+        logger.info(f"Initialized AgenticExecutor for agent {self.agent_id} with sandbox: {self.allowed_base_path}")
+        
     def create_file(self, file_path: str, content: str, project_name: str = None) -> bool:
-        """Create a file with given content in proper project structure"""
+        """Create a file with given content in proper project structure with sandboxing"""
         try:
             # If project_name is provided, create file in projects/{project_name}/
             if project_name:
@@ -281,33 +418,77 @@ class AgenticExecutor:
                 project_dir.mkdir(parents=True, exist_ok=True)
                 full_path = project_dir / file_path
             else:
-                full_path = self.working_directory / file_path
+                # Use the sandboxed path
+                full_path = self.allowed_base_path / file_path
+            
+            # Validate the final path against sandbox boundaries
+            if not self.path_validator.validate_path(str(full_path)):
+                self.file_monitor.log_access(self.agent_id, "create_file", str(full_path), allowed=False)
+                self.boundary_alert.send_alert(
+                    self.agent_id, 
+                    "create_file", 
+                    str(full_path), 
+                    f"Attempted to create file outside sandbox boundary: {self.allowed_base_path}"
+                )
+                raise PermissionError(f"Agent {self.agent_id} cannot create file {full_path} outside sandbox boundary")
             
             # Ensure parent directory exists
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-                
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             
+            # Log successful file creation
+            self.file_monitor.log_access(self.agent_id, "create_file", str(full_path), allowed=True)
             self._log_action(f"Created file: {full_path.relative_to(self.working_directory)}")
-            self._track_execution("system", f"create_file: {file_path}", "success")
-            logger.info(f"Created file: {full_path.relative_to(self.working_directory)}")
+            self._track_execution(self.agent_id, f"create_file: {file_path}", "success")
+            logger.info(f"Agent {self.agent_id} created file: {full_path.relative_to(self.working_directory)}")
             return True
             
+        except PermissionError:
+            # Re-raise permission errors
+            raise
         except Exception as e:
             logger.error(f"Error creating file {file_path}: {e}")
             # Log error for tracking
-            self.execution_tracker.log_error("system", f"create_file: {file_path}", str(e))
+            self.execution_tracker.log_error(self.agent_id, f"create_file: {file_path}", str(e))
             # Attempt recovery
             recovery_context = {"file_path": file_path, "error": str(e)}
             self.recovery_mechanism.recover_from_error("file_creation_failed", recovery_context)
             return False
     
     def execute_command(self, command: str, timeout: int = 30) -> Dict[str, Any]:
-        """Execute a shell command and return results"""
+        """Execute a shell command and return results with sandboxing"""
         try:
+            # Validate command against sandbox boundaries
+            if self._command_attempts_file_access(command):
+                # Check if command involves file operations outside sandbox
+                file_paths = self._extract_file_paths_from_command(command)
+                
+                for file_path in file_paths:
+                    # For absolute paths, validate directly
+                    if file_path.startswith('/'):
+                        if not self.path_validator.validate_path(file_path):
+                            self.file_monitor.log_access(self.agent_id, "execute_command", file_path, allowed=False)
+                            self.boundary_alert.send_alert(
+                                self.agent_id, 
+                                "execute_command", 
+                                file_path, 
+                                f"Command attempts file access outside sandbox boundary: {self.allowed_base_path}"
+                            )
+                            raise PermissionError(f"Agent {self.agent_id} cannot execute command that accesses {file_path} outside sandbox boundary")
+                    else:
+                        # For relative paths, validate against working directory
+                        if not self.path_validator.validate_path(str(self.working_directory / file_path)):
+                            self.file_monitor.log_access(self.agent_id, "execute_command", file_path, allowed=False)
+                            self.boundary_alert.send_alert(
+                                self.agent_id, 
+                                "execute_command", 
+                                file_path, 
+                                f"Command attempts file access outside sandbox boundary: {self.allowed_base_path}"
+                            )
+                            raise PermissionError(f"Agent {self.agent_id} cannot execute command that accesses {file_path} outside sandbox boundary")
+            
             # Handle paths with spaces by properly quoting them
             import shlex
             if 'projects/' in command and ' ' in command:
@@ -321,15 +502,18 @@ class AgenticExecutor:
                         quoted_parts.append(part)
                 command = ' '.join(quoted_parts)
             
+            # Use sandboxed working directory for command execution
+            execution_cwd = self.allowed_base_path
+            
             # Special handling for 'source' command
             if command.strip().startswith("source "):
                 # Execute source in a new bash shell to ensure it's properly interpreted
                 full_command = f"bash -c '{command}'"
-                logger.info(f"Executing source command via bash -c: {full_command}")
+                logger.info(f"Agent {self.agent_id} executing source command via bash -c: {full_command}")
                 result = subprocess.run(
                     full_command,
                     shell=True,
-                    cwd=self.working_directory,
+                    cwd=execution_cwd,
                     capture_output=True,
                     text=True,
                     timeout=timeout
@@ -338,7 +522,7 @@ class AgenticExecutor:
                 result = subprocess.run(
                     command,
                     shell=True,
-                    cwd=self.working_directory,
+                    cwd=execution_cwd,
                     capture_output=True,
                     text=True,
                     timeout=timeout
@@ -352,9 +536,11 @@ class AgenticExecutor:
                 "success": result.returncode == 0
             }
             
+            # Log successful command execution
+            self.file_monitor.log_access(self.agent_id, "execute_command", command, allowed=True)
             self._log_action(f"Executed command: {command} (exit code: {result.returncode})")
-            self._track_execution("system", f"execute_command: {command}", "success" if execution_result["success"] else "failed")
-            logger.info(f"Executed command: {command}")
+            self._track_execution(self.agent_id, f"execute_command: {command}", "success" if execution_result["success"] else "failed")
+            logger.info(f"Agent {self.agent_id} executed command: {command}")
             
             return execution_result
             
@@ -381,17 +567,77 @@ class AgenticExecutor:
             self.recovery_mechanism.recover_from_error("command_execution_failed", recovery_context)
             return error_result
     
+    def _command_attempts_file_access(self, command: str) -> bool:
+        """Check if a command attempts file access"""
+        file_operations = [
+            'touch', 'mkdir', 'rm', 'cp', 'mv', 'ln', 'chmod', 'chown',
+            'cat', 'head', 'tail', 'less', 'more', 'grep', 'find',
+            'echo', '>', '>>', '<', '|', 'tee', 'dd', 'tar', 'zip',
+            'git', 'svn', 'hg', 'rsync', 'scp', 'sftp', 'ls'
+        ]
+        
+        command_lower = command.lower()
+        return any(op in command_lower for op in file_operations)
+    
+    def _extract_file_paths_from_command(self, command: str) -> List[str]:
+        """Extract potential file paths from a command"""
+        import re
+        
+        # Patterns to match file paths
+        patterns = [
+            r'[\w\-\./]+\.(py|js|ts|html|css|json|yaml|yml|md|txt|sh|bash|zsh)$',
+            r'[\w\-\./]+/([\w\-\.]+/)*[\w\-\.]+$',
+            r'[\w\-\./]+$'
+        ]
+        
+        file_paths = []
+        for pattern in patterns:
+            matches = re.findall(pattern, command)
+            file_paths.extend(matches)
+        
+        # Filter out common command arguments that aren't file paths
+        filtered_paths = []
+        for path in file_paths:
+            if path and not path.startswith('-') and not path in ['true', 'false', 'yes', 'no']:
+                filtered_paths.append(path)
+        
+        # Also check for absolute paths that might be outside sandbox
+        absolute_path_pattern = r'/[^\s]+'
+        absolute_matches = re.findall(absolute_path_pattern, command)
+        for path in absolute_matches:
+            if path and not path.startswith('-') and not path in ['/dev', '/proc', '/sys', '/tmp']:
+                filtered_paths.append(path)
+        
+        return filtered_paths
+    
     def create_directory(self, dir_path: str) -> bool:
-        """Create a directory"""
+        """Create a directory with sandboxing"""
         try:
-            full_path = self.working_directory / dir_path
+            # Validate directory path against sandbox boundaries
+            full_path = self.allowed_base_path / dir_path
+            
+            if not self.path_validator.validate_path(str(full_path)):
+                self.file_monitor.log_access(self.agent_id, "create_directory", dir_path, allowed=False)
+                self.boundary_alert.send_alert(
+                    self.agent_id, 
+                    "create_directory", 
+                    dir_path, 
+                    f"Attempted to create directory outside sandbox boundary: {self.allowed_base_path}"
+                )
+                raise PermissionError(f"Agent {self.agent_id} cannot create directory {dir_path} outside sandbox boundary")
+            
             full_path.mkdir(parents=True, exist_ok=True)
             
+            # Log successful directory creation
+            self.file_monitor.log_access(self.agent_id, "create_directory", str(full_path), allowed=True)
             self._log_action(f"Created directory: {dir_path}")
-            self._track_execution("system", f"create_directory: {dir_path}", "success")
-            logger.info(f"Created directory: {dir_path}")
+            self._track_execution(self.agent_id, f"create_directory: {dir_path}", "success")
+            logger.info(f"Agent {self.agent_id} created directory: {dir_path}")
             return True
             
+        except PermissionError:
+            # Re-raise permission errors
+            raise
         except Exception as e:
             logger.error(f"Error creating directory {dir_path}: {e}")
             return False

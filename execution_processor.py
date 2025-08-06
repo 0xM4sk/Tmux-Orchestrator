@@ -21,12 +21,20 @@ class ExecutionProcessor:
     Processes agent responses and executes any agentic commands found
     """
     
-    def __init__(self, working_directory: str = "."):
-        self.executor = AgenticExecutor(working_directory)
+    def __init__(self, working_directory: str = ".", agent_id: str = None, project_name: str = None):
+        self.working_directory = working_directory
+        self.agent_id = agent_id
+        self.project_name = project_name
+        
+        # Initialize sandboxed executor
+        self.executor = AgenticExecutor(working_directory, agent_id, project_name)
+        
         self.execution_pattern = re.compile(
             r'```execute\s*\n(.*?)\n```', 
             re.DOTALL | re.MULTILINE
         )
+        
+        logger.info(f"Initialized ExecutionProcessor for agent {agent_id} with project {project_name}")
     
     def _discover_agents(self) -> List[Dict[str, Any]]:
         """Discover available agents using qwen_control.py"""

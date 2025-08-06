@@ -1,0 +1,121 @@
+{
+  "sandbox_config": {
+    "default_boundaries": {
+      "root_directory": "/home/baseline/Tmux-Orchestrator",
+      "restricted_paths": [
+        "/home/baseline/Tmux-Orchestrator/core",
+        "/home/baseline/Tmux-Orchestrator/services",
+        "/home/baseline/Tmux-Orchestrator/qwen_control.py",
+        "/home/baseline/Tmux-Orchestrator/README.md",
+        "/home/baseline/Tmux-Orchestrator/agentic_capabilities.py",
+        "/home/baseline/Tmux-Orchestrator/execution_processor.py",
+        "/home/baseline/Tmux-Orchestrator/sandbox_manager.py",
+        "/home/baseline/Tmux-Orchestrator/agent_sandbox_config.json"
+      ],
+      "allowed_project_paths": [
+        "/home/baseline/Tmux-Orchestrator/projects"
+      ]
+    },
+    "project_sandboxes": {
+      "_template": {
+        "allowed_base_path": "/home/baseline/Tmux-Orchestrator/projects/{project_name}",
+        "allowed_subdirectories": [
+          "src",
+          "tests",
+          "docs",
+          "config",
+          "backend",
+          "frontend",
+          "api",
+          "database",
+          "scripts",
+          "assets"
+        ],
+        "restricted_paths": [
+          "/home/baseline/Tmux-Orchestrator",
+          "/home/baseline/Tmux-Orchestrator/core",
+          "/home/baseline/Tmux-Orchestrator/services"
+        ]
+      },
+      "demo-project-20250805_204927-15abe770": {
+        "allowed_base_path": "/home/baseline/Tmux-Orchestrator/projects/demo-project-20250805_204927-15abe770",
+        "allowed_subdirectories": [
+          "src",
+          "tests",
+          "docs",
+          "config",
+          "backend",
+          "frontend",
+          "api",
+          "database",
+          "scripts",
+          "assets"
+        ],
+        "restricted_paths": [
+          "/home/baseline/Tmux-Orchestrator",
+          "/home/baseline/Tmux-Orchestrator/core",
+          "/home/baseline/Tmux-Orchestrator/services"
+        ]
+      }
+    },
+    "agent_types": {
+      "developer": {
+        "allowed_operations": [
+          "create_file",
+          "create_directory",
+          "execute_command",
+          "read_file",
+          "list_directory"
+        ],
+        "restricted_operations": [
+          "system_command",
+          "root_access",
+          "delete_file",
+          "modify_system_files"
+        ]
+      },
+      "project_manager": {
+        "allowed_operations": [
+          "create_file",
+          "create_directory",
+          "execute_command",
+          "read_file",
+          "list_directory",
+          "create_project_team"
+        ],
+        "restricted_operations": [
+          "system_command",
+          "root_access",
+          "delete_file",
+          "modify_system_files"
+        ]
+      },
+      "qa": {
+        "allowed_operations": [
+          "create_file",
+          "create_directory",
+          "execute_command",
+          "read_file",
+          "list_directory",
+          "run_tests"
+        ],
+        "restricted_operations": [
+          "system_command",
+          "root_access",
+          "delete_file",
+          "modify_system_files"
+        ]
+      }
+    },
+    "security_settings": {
+      "enable_path_validation": true,
+      "enable_file_access_monitoring": true,
+      "enable_boundary_violation_alerts": true,
+      "log_all_file_operations": true,
+      "prevent_root_access": true,
+      "restrict_system_commands": true,
+      "auto_create_project_directories": true,
+      "dynamic_project_registration": true
+    }
+  }
+}

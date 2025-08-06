@@ -1,2 +1,4 @@
 |
-# Empty file to make 'backend' a package
+#!/usr/bin/env python3
+from flask import Flask
+app = Flask(__name__)

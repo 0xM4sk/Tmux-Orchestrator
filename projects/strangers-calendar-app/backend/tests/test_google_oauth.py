@@ -1,11 +1,21 @@
 |
-import pytest
-from backend.auth.google_oauth import fetch_user_info_from_google
+import unittest
+from backend.auth.google_oauth import app
 
-@pytest.fixture
-def access_token():
-return 'test_access_token'
+class TestGoogleOauth(unittest.TestCase):
+def setUp(self):
+self.app = app.test_client()
+self.app.testing = True
 
-def test_fetch_user_info_from_google(access_token):
-user_info = fetch_user_info_from_google(access_token)
-assert 'sub' in user_info
+def test_login_route(self):
+response = self.app.get('/login')
+self.assertEqual(response.status_code, 302)
+
+def test_authorize_route(self):
+with app.test_request_context():
+session['google_token'] = 'fake_access_token'
+response = self.app.get('/authorize')
+self.assertIn('Logged in as', response.data.decode())
+
+if __name__ == '__main__':
+unittest.main()

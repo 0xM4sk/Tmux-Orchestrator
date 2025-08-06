@@ -1,16 +1,23 @@
 |
-import unittest
-from backend.auth.google import google_auth
-from backend.auth.apple import apple_auth
+import pytest
+from backend.auth.oauth import google_auth_callback, apple_auth_callback
 
-class TestOAuth(unittest.TestCase):
-def test_google_auth(self):
-# Mock the request and response for Google OAuth
-pass
+def test_google_auth_callback():
+# Mock the OAuth callback response
+mock_response = {
+'id_token': 'mocked_id_token',
+'token_type': 'Bearer'
+}
+# Call the function and assert the expected outcome
+result = google_auth_callback(mock_response)
+assert result == "Google Auth Successful"
 
-def test_apple_auth(self):
-# Mock the request and response for Apple OAuth
-pass
-
-if __name__ == '__main__':
-unittest.main()
+def test_apple_auth_callback():
+# Mock the OAuth callback response
+mock_response = {
+'id_token': 'mocked_id_token',
+'token_type': 'Bearer'
+}
+# Call the function and assert the expected outcome
+result = apple_auth_callback(mock_response)
+assert result == "Apple Auth Successful"
