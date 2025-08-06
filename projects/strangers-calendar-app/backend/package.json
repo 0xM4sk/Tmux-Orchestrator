@@ -1,20 +1,17 @@
 |
 {
-"name": "Strangers Calendar App",
+"name": "strangers-calendar-app",
 "version": "1.0.0",
-"description": "A calendar app for strangers.",
+"description": "",
 "main": "index.js",
 "scripts": {
-"start": "node index.js",
-"test": "jest"
+"test": "python -m unittest discover tests"
 },
+"keywords": [],
+"author": "",
+"license": "ISC",
 "dependencies": {
 "express": "^4.17.1",
-"oauth2-client-js": "^5.0.0"
-},
-"devDependencies": {
-"@babel/preset-env": "^7.16.13",
-"babel-jest": "^27.5.1",
-"jest": "^27.5.1"
+"unittest2": "^0.8.3"
 }
 }

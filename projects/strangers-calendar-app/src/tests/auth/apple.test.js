@@ -1,28 +1,25 @@
 |
 const request = require('supertest');
-const app = require('../src/index');
-const appleAuthRoutes = require('../src/auth/apple');
+const app = require('../server');
 
 describe('Apple OAuth Authentication', () => {
-it('should redirect to Apple login page when accessing /auth/login', async () => {
-const response = await request(app)
-.get('/auth/login')
-.expect(302);
-expect(response.headers.location).toContain('apple.com');
+it('should redirect to Apple login page', async () => {
+const response = await request(app).get('/api/auth/apple/login');
+expect(response.status).toBe(302);
+expect(response.headers.location).toContain('appleid.apple.com');
 });
 
-it('should authenticate and redirect on successful callback', async () => {
-// Mock the passport.authenticate middleware
-app.use(passport.initialize());
-appleAuthRoutes.get('/callback', 
-passport.authenticate('apple', { failureRedirect: '/login' }),
-(req, res) => {
-res.redirect('/');
+it('should handle authentication callback successfully', async () => {
+// Mock the authentication logic
+jest.spyOn(passport, 'authenticate').mockImplementation((strategy, options, callback) => (req, res) => {
+req.user = { id: 1, username: 'testuser' };
+return callback(null, true);
 });
 
-const response = await request(app)
-.get('/auth/callback')
-.expect(302);
+const response = await request(app).get('/api/auth/apple/callback')
+.set('Cookie', ['connect.sid=s%3Aabcde.12345']);
+
+expect(response.status).toBe(302);
 expect(response.headers.location).toBe('/');
 });
 });
